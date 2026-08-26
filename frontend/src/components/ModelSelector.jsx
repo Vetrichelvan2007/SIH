@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { MODEL_OPTIONS } from '../mock/mockData';
-import { IconChevronDown, IconCheck } from './Icons';
+import { IconChevronDown, IconCheck, IconCode, IconMessage } from './Icons';
 
-const ModelSelector = ({ selectedModel, onSelectModel }) => {
+const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -18,59 +17,115 @@ const ModelSelector = ({ selectedModel, onSelectModel }) => {
   }, []);
 
   return (
-    <div className="model-selector-wrapper" ref={dropdownRef}>
-      <button 
-        type="button" 
-        className="model-selector-trigger" 
-        onClick={() => setIsOpen(!isOpen)}
-        aria-haspopup="true"
-        aria-expanded={isOpen}
-      >
-        <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>Task:</span>
-        <span style={{ fontWeight: 600 }}>{selectedModel.task}</span>
-        <span className="model-pill-badge">{selectedModel.model}</span>
-        <IconChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      {/* Quick Task Switcher Buttons */}
+      <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+        <button
+          type="button"
+          onClick={() => onSelectTask('coding')}
+          style={{
+            background: selectedTask === 'coding' ? 'var(--accent-cyan-blue)' : 'transparent',
+            color: selectedTask === 'coding' ? '#000' : 'var(--text-secondary)',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '4px 12px',
+            fontSize: '12px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <IconCode size={13} />
+          <span>Coding</span>
+        </button>
 
-      {isOpen && (
-        <div className="model-dropdown-menu">
-          <div className="dropdown-header">
-            Select Task & Local Model
-          </div>
-          {MODEL_OPTIONS.map((item) => {
-            const isSelected = selectedModel.id === item.id;
-            return (
-              <div
-                key={item.id}
-                className={`model-option-card ${isSelected ? 'selected' : ''} ${item.disabled ? 'disabled' : ''}`}
-                onClick={() => {
-                  if (!item.disabled) {
-                    onSelectModel(item);
+        <button
+          type="button"
+          onClick={() => onSelectTask('question')}
+          style={{
+            background: selectedTask === 'question' ? 'var(--accent-cyan-blue)' : 'transparent',
+            color: selectedTask === 'question' ? '#000' : 'var(--text-secondary)',
+            border: 'none',
+            borderRadius: '6px',
+            padding: '4px 12px',
+            fontSize: '12px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <IconMessage size={13} />
+          <span>Question / General</span>
+        </button>
+      </div>
+
+      {/* Model Status Dropdown Trigger */}
+      <div className="model-selector-wrapper" ref={dropdownRef}>
+        <button 
+          type="button" 
+          className="model-selector-trigger" 
+          onClick={() => setIsOpen(!isOpen)}
+          aria-haspopup="true"
+          aria-expanded={isOpen}
+        >
+          <span className="model-pill-badge">{selectedModel?.id || 'qwen2.5-coder'}</span>
+          <IconChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+
+        {isOpen && (
+          <div className="model-dropdown-menu">
+            <div className="dropdown-header">
+              Available Local Models
+            </div>
+            {models.map((item) => {
+              const isSelected = selectedTask === item.task;
+              return (
+                <div
+                  key={item.id}
+                  className={`model-option-card ${isSelected ? 'selected' : ''}`}
+                  onClick={() => {
+                    onSelectTask(item.task);
                     setIsOpen(false);
-                  }
-                }}
-              >
-                <div className="option-top-row">
-                  <span className="option-task-name">{item.task}</span>
-                  {item.disabled ? (
-                    <span className="option-badge-disabled">Coming Soon</span>
-                  ) : (
-                    <span className="option-model-id">{item.model}</span>
+                  }}
+                >
+                  <div className="option-top-row">
+                    <span className="option-task-name">{item.type}</span>
+                    <span 
+                      style={{ 
+                        fontSize: '10px', 
+                        padding: '2px 6px', 
+                        borderRadius: '4px',
+                        fontWeight: 600,
+                        backgroundColor: item.available ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                        color: item.available ? 'var(--accent-emerald)' : 'var(--accent-rose)'
+                      }}
+                    >
+                      {item.status || (item.available ? 'Available' : 'Unavailable')}
+                    </span>
+                  </div>
+                  <div className="option-model-id" style={{ marginTop: '2px' }}>
+                    {item.name || item.id}
+                  </div>
+                  <div className="option-desc" style={{ marginTop: '4px' }}>
+                    {item.description}
+                  </div>
+                  {isSelected && (
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
+                      <IconCheck size={14} style={{ color: 'var(--accent-cyan)' }} />
+                    </div>
                   )}
                 </div>
-                <div className="option-desc">
-                  {item.description}
-                </div>
-                {isSelected && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
-                    <IconCheck size={14} style={{ color: 'var(--accent-cyan)' }} />
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

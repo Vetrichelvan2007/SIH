@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { IconBot, IconUser, IconCopy, IconCheck } from './Icons';
+import ExecutionPipeline from './ExecutionPipeline';
 
 // Code Block Sub-component with Copy Button
 const CodeBlock = ({ language, code }) => {
@@ -52,7 +53,6 @@ const FormattedMessageText = ({ text }) => {
   let match;
 
   while ((match = codeBlockRegex.exec(text)) !== null) {
-    // Push preceding text segment if non-empty
     if (match.index > lastIndex) {
       parts.push({
         type: 'text',
@@ -69,7 +69,6 @@ const FormattedMessageText = ({ text }) => {
     lastIndex = codeBlockRegex.lastIndex;
   }
 
-  // Push remaining text after last code block
   if (lastIndex < text.length) {
     parts.push({
       type: 'text',
@@ -84,7 +83,6 @@ const FormattedMessageText = ({ text }) => {
           return <CodeBlock key={index} language={part.language} code={part.code} />;
         }
 
-        // Process inline bold (**text**), inline code (`code`), and paragraphs
         const lines = part.content.split('\n');
         return (
           <div key={index}>
@@ -93,7 +91,6 @@ const FormattedMessageText = ({ text }) => {
                 return <div key={lIdx} style={{ height: '8px' }}></div>;
               }
 
-              // Simple inline bold and inline code formatting
               const formattedLine = renderInlineFormatting(line);
               return (
                 <p key={lIdx} style={{ margin: '3px 0' }}>
@@ -145,8 +142,20 @@ function renderInlineFormatting(text) {
   return parts.length > 0 ? parts : text;
 }
 
+// Format model display name to prevent "undefined"
+const formatModelDisplayName = (modelStr) => {
+  if (!modelStr || modelStr === 'undefined') return 'Qwen2.5-Coder';
+  if (typeof modelStr === 'object') {
+    return modelStr.name || modelStr.id || 'Qwen2.5-Coder';
+  }
+  if (modelStr.toLowerCase().includes('phi')) return 'Phi-4 Mini';
+  if (modelStr.toLowerCase().includes('qwen')) return 'Qwen2.5-Coder';
+  return modelStr;
+};
+
 const ChatMessage = ({ message }) => {
   const isUser = message.sender === 'user';
+  const modelDisplayName = formatModelDisplayName(message.modelName || message.model);
 
   return (
     <div className={`message-row ${isUser ? 'user' : 'ai'}`}>
@@ -157,15 +166,40 @@ const ChatMessage = ({ message }) => {
       <div className="message-content-wrapper">
         <div className="message-meta">
           <span>{isUser ? 'You' : 'Sovereign Agent'}</span>
-          {!isUser && message.model && (
-            <span className="meta-model-tag">{message.model}</span>
+          {!isUser && (
+            <span className="meta-model-tag">{modelDisplayName}</span>
           )}
           <span>• {message.timestamp || 'Just now'}</span>
         </div>
 
-        <div className="message-bubble">
-          <FormattedMessageText text={message.text} />
-        </div>
+        {/* Render Execution Pipeline if present on active generating AI message */}
+        {!isUser && message.pipeline && (
+          <ExecutionPipeline 
+            currentStage={message.pipeline.stage}
+            completedStages={message.pipeline.completedStages || []}
+            taskLabel={message.pipeline.taskLabel || 'Coding'}
+            modelName={modelDisplayName}
+            metrics={message.pipeline.metrics}
+            isComplete={message.pipeline.isComplete}
+            error={message.pipeline.error}
+          />
+        )}
+
+        {/* Message bubble content */}
+        {(message.text || isUser) && (
+          <div className="message-bubble">
+            <FormattedMessageText text={message.text} />
+          </div>
+        )}
+
+        {/* Timing metrics footer badge for completed assistant messages */}
+        {!isUser && message.metrics?.total_response_time && (
+          <div className="message-response-time-badge">
+            <span className="time-badge-icon">⚡</span>
+            <span>Generated locally · </span>
+            <span className="time-badge-highlight">Completed in {message.metrics.total_response_time}s</span>
+          </div>
+        )}
       </div>
     </div>
   );

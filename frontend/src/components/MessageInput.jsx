@@ -5,6 +5,9 @@ const MessageInput = ({ onSendMessage, selectedModel, isGenerating }) => {
   const [text, setText] = useState('');
   const textareaRef = useRef(null);
 
+  const modelDisplayName = selectedModel?.name || selectedModel?.model || 'Qwen2.5-Coder';
+  const taskLabel = selectedModel?.type || selectedModel?.task || 'Coding';
+
   // Auto-resize textarea based on content
   useEffect(() => {
     if (textareaRef.current) {
@@ -38,8 +41,8 @@ const MessageInput = ({ onSendMessage, selectedModel, isGenerating }) => {
           className="chat-textarea"
           placeholder={
             isGenerating 
-              ? `${selectedModel.model} is generating local response...` 
-              : `Ask ${selectedModel.model} (${selectedModel.task})... [Press Enter to send]`
+              ? `${modelDisplayName} is generating locally...` 
+              : `Ask ${modelDisplayName} (${taskLabel})... [Press Enter to send]`
           }
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -52,7 +55,7 @@ const MessageInput = ({ onSendMessage, selectedModel, isGenerating }) => {
           <div className="input-model-info">
             <IconSparkles size={14} style={{ color: 'var(--accent-cyan)' }} />
             <span>Active Model:</span>
-            <span className="input-model-tag">{selectedModel.model}</span>
+            <span className="input-model-tag">{modelDisplayName}</span>
           </div>
 
           <button

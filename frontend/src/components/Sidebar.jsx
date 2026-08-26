@@ -1,4 +1,4 @@
-import { IconShield, IconPlus, IconMessage, IconTrash, IconCpu } from './Icons';
+import { IconShield, IconPlus, IconMessage, IconTrash, IconCpu, IconCheck } from './Icons';
 
 const Sidebar = ({ 
   sessions, 
@@ -6,6 +6,9 @@ const Sidebar = ({
   onSelectSession, 
   onNewChat, 
   onDeleteSession,
+  models = [],
+  selectedTask,
+  onSelectTask,
   isMobileOpen,
   onCloseMobile
 }) => {
@@ -83,6 +86,47 @@ const Sidebar = ({
             );
           })
         )}
+      </div>
+
+      {/* Available Models Section */}
+      <div className="sidebar-section-title" style={{ marginTop: '12px' }}>
+        Available Models
+      </div>
+      <div style={{ padding: '0 12px 12px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {models.map((m) => {
+          const isSelected = selectedTask === m.task;
+          return (
+            <div
+              key={m.id}
+              onClick={() => onSelectTask(m.task)}
+              style={{
+                background: isSelected ? 'var(--bg-card-active)' : 'var(--bg-card)',
+                border: isSelected ? '1px solid var(--border-accent)' : '1px solid var(--border-subtle)',
+                borderRadius: '8px',
+                padding: '8px 10px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+                <span>{m.type}</span>
+                <span 
+                  style={{ 
+                    color: m.available ? 'var(--accent-emerald)' : 'var(--accent-rose)', 
+                    fontWeight: 600, 
+                    fontSize: '10px' 
+                  }}
+                >
+                  {m.status || (m.available ? 'Available' : 'Unavailable')}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                {m.available && <IconCheck size={13} style={{ color: 'var(--accent-emerald)' }} />}
+                <span>{m.name || m.id}</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {/* Footer System Specs */}

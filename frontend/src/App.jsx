@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MODEL_OPTIONS, INITIAL_SESSIONS } from './mock/mockData';
 import Sidebar from './components/Sidebar';
 import ChatWindow from './components/ChatWindow';
@@ -7,12 +7,40 @@ import './App.css';
 function App() {
   const [sessions, setSessions] = useState(INITIAL_SESSIONS);
   const [activeSessionId, setActiveSessionId] = useState(INITIAL_SESSIONS[0]?.id || 'session-1');
-  const [selectedModel, setSelectedModel] = useState(MODEL_OPTIONS[1]); // Default: Coding -> Qwen2.5-Coder
+  const [models, setModels] = useState(MODEL_OPTIONS);
+  const [selectedTask, setSelectedTask] = useState('coding'); // 'coding' | 'question'
   const [modelStatus, setModelStatus] = useState('ready'); // 'ready' | 'loading' | 'generating'
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
+  // Fetch live model availability from backend on mount
+  useEffect(() => {
+    const fetchAvailableModels = async () => {
+      try {
+        const response = await fetch("http://localhost:8000/models");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.models && Array.isArray(data.models)) {
+            setModels(data.models);
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch local model availability from FastAPI backend:", err);
+      }
+    };
+
+    fetchAvailableModels();
+  }, []);
+
+  // Compute selected model object based on current selectedTask
+  const selectedModel = models.find((m) => m.task === selectedTask) || models[0];
+
   // Get active session object
   const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
+
+  // Handler to switch selected task ('coding' vs 'question')
+  const handleSelectTask = (taskKey) => {
+    setSelectedTask(taskKey);
+  };
 
   // Handler to create a brand new chat session
   const handleNewChat = async () => {
@@ -20,8 +48,8 @@ function App() {
     const newSession = {
       id: newId,
       title: 'New Conversation',
-      task: selectedModel.task,
-      model: selectedModel.model,
+      task: selectedTask,
+      model: selectedModel?.id || 'qwen2.5-coder',
       updatedAt: 'Just now',
       messages: []
     };
@@ -38,14 +66,6 @@ function App() {
   // Handler to switch active session
   const handleSelectSession = (id) => {
     setActiveSessionId(id);
-    const targetSession = sessions.find((s) => s.id === id);
-    if (targetSession) {
-      // Sync model if session matched a specific model
-      const matched = MODEL_OPTIONS.find((m) => m.model === targetSession.model);
-      if (matched && !matched.disabled) {
-        setSelectedModel(matched);
-      }
-    }
   };
 
   // Handler to delete a session
@@ -57,32 +77,43 @@ function App() {
     }
   };
 
-  // Handler to switch model/task selection
-  const handleSelectModel = (modelOption) => {
-    if (modelOption.disabled) return;
-    setSelectedModel(modelOption);
-    
-    // Update active session metadata if empty
-    if (activeSession && activeSession.messages.length === 0) {
-      setSessions((prev) =>
-        prev.map((s) =>
-          s.id === activeSessionId
-            ? { ...s, task: modelOption.task, model: modelOption.model }
-            : s
-        )
-      );
-    }
-  };
-
-  // Handler to send a message via real FastAPI backend (http://localhost:8000/chat)
+  // Handler to send a chat message and consume SSE stream
   const handleSendMessage = async (userText) => {
     if (!userText.trim() || modelStatus !== 'ready') return;
 
     const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const userMsgId = `user-${Date.now()}`;
+    const aiMsgId = `ai-${Date.now()}`;
+
     const userMessage = {
-      id: `user-${Date.now()}`,
+      id: userMsgId,
       sender: 'user',
       text: userText,
+      timestamp: timeString
+    };
+
+    const taskLabel = selectedTask === 'coding' ? 'Coding' : 'Question / General';
+    const modelDisplayName = selectedModel?.name || selectedModel?.model || (selectedTask === 'coding' ? 'Qwen2.5-Coder' : 'Phi-4 Mini');
+    const modelId = selectedModel?.id || (selectedTask === 'coding' ? 'qwen2.5-coder' : 'phi4-mini');
+
+    // Create initial streaming AI message with live pipeline state
+    const initialAiMessage = {
+      id: aiMsgId,
+      sender: 'ai',
+      model: modelId,
+      modelName: modelDisplayName,
+      task: taskLabel,
+      text: '',
+      pipeline: {
+        stage: 'query_received',
+        completedStages: ['query_received'],
+        taskLabel: taskLabel,
+        modelName: modelDisplayName,
+        isComplete: false,
+        metrics: null,
+        error: null
+      },
+      metrics: null,
       timestamp: timeString
     };
 
@@ -92,33 +123,35 @@ function App() {
       updatedTitle = userText.length > 32 ? `${userText.slice(0, 32)}...` : userText;
     }
 
-    // 1. Append user message to active session
+    // 1. Append user & AI placeholder message to active session
     setSessions((prev) =>
       prev.map((s) => {
         if (s.id === activeSessionId) {
           return {
             ...s,
             title: updatedTitle,
-            messages: [...s.messages, userMessage]
+            messages: [...s.messages, userMessage, initialAiMessage]
           };
         }
         return s;
       })
     );
 
-    // 2. Set Status -> Loading
-    setModelStatus('loading');
+    // 2. Set Status -> Generating
+    setModelStatus('generating');
+
+    const startTime = performance.now();
 
     try {
-      // 3. Send real POST request to FastAPI backend connected to local Ollama Qwen2.5-Coder
+      // 3. Initiate SSE connection to FastAPI backend
       const response = await fetch("http://localhost:8000/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          query: userText,
-          task: "coding"
+          message: userText,
+          task: selectedTask
         })
       });
 
@@ -127,47 +160,161 @@ function App() {
         throw new Error(errorData.detail || `Backend returned HTTP status ${response.status}`);
       }
 
-      const data = await response.json();
-      const aiResponseText = data.response;
-      const responseModel = data.model || 'qwen2.5-coder';
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
 
-      const aiMessage = {
-        id: `ai-${Date.now()}`,
-        sender: 'ai',
-        model: responseModel,
-        task: 'Coding',
-        text: aiResponseText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
 
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === activeSessionId) {
-            return {
-              ...s,
-              messages: [...s.messages, aiMessage]
-            };
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+
+          const jsonString = trimmed.replace(/^data:\s*/, "");
+          if (!jsonString) continue;
+
+          try {
+            const event = JSON.parse(jsonString);
+
+            // Handle SSE Event Types
+            if (event.type === 'status') {
+              setSessions((prev) =>
+                prev.map((s) => {
+                  if (s.id === activeSessionId) {
+                    return {
+                      ...s,
+                      messages: s.messages.map((m) => {
+                        if (m.id === aiMsgId && m.pipeline) {
+                          const updatedCompleted = Array.from(
+                            new Set([...m.pipeline.completedStages, event.stage])
+                          );
+                          return {
+                            ...m,
+                            pipeline: {
+                              ...m.pipeline,
+                              stage: event.stage,
+                              completedStages: updatedCompleted,
+                              taskLabel: event.task_label || m.pipeline.taskLabel,
+                              modelName: event.model_name || m.pipeline.modelName
+                            }
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return s;
+                })
+              );
+            } else if (event.type === 'token') {
+              setSessions((prev) =>
+                prev.map((s) => {
+                  if (s.id === activeSessionId) {
+                    return {
+                      ...s,
+                      messages: s.messages.map((m) => {
+                        if (m.id === aiMsgId) {
+                          return {
+                            ...m,
+                            text: m.text + event.content
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return s;
+                })
+              );
+            } else if (event.type === 'complete') {
+              const endTime = performance.now();
+              const calcTime = parseFloat(((endTime - startTime) / 1000).toFixed(2));
+              const finalMetrics = event.metrics || { total_response_time: calcTime };
+
+              setSessions((prev) =>
+                prev.map((s) => {
+                  if (s.id === activeSessionId) {
+                    return {
+                      ...s,
+                      messages: s.messages.map((m) => {
+                        if (m.id === aiMsgId) {
+                          return {
+                            ...m,
+                            metrics: finalMetrics,
+                            pipeline: {
+                              ...m.pipeline,
+                              stage: 'completed',
+                              isComplete: true,
+                              metrics: finalMetrics
+                            }
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return s;
+                })
+              );
+            } else if (event.type === 'error') {
+              setSessions((prev) =>
+                prev.map((s) => {
+                  if (s.id === activeSessionId) {
+                    return {
+                      ...s,
+                      messages: s.messages.map((m) => {
+                        if (m.id === aiMsgId && m.pipeline) {
+                          return {
+                            ...m,
+                            pipeline: {
+                              ...m.pipeline,
+                              error: event.message
+                            }
+                          };
+                        }
+                        return m;
+                      })
+                    };
+                  }
+                  return s;
+                })
+              );
+            }
+          } catch (err) {
+            console.warn("Failed to parse SSE JSON line:", err);
           }
-          return s;
-        })
-      );
+        }
+      }
     } catch (err) {
-      console.error("Error communicating with FastAPI backend:", err);
-      const errorMessage = {
-        id: `err-${Date.now()}`,
-        sender: 'ai',
-        model: 'qwen2.5-coder',
-        task: 'Error',
-        text: `⚠️ **FastAPI Backend Error**\n\nCould not fetch response from \`http://localhost:8000/chat\`.\n\n**Details**: ${err.message || 'Make sure the FastAPI server is running via `uvicorn main:app --reload --port 8000` and Ollama is active.'}`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      };
+      console.error("Error consuming SSE stream:", err);
+      const endTime = performance.now();
+      const errTime = parseFloat(((endTime - startTime) / 1000).toFixed(2));
 
       setSessions((prev) =>
         prev.map((s) => {
           if (s.id === activeSessionId) {
             return {
               ...s,
-              messages: [...s.messages, errorMessage]
+              messages: s.messages.map((m) => {
+                if (m.id === aiMsgId) {
+                  return {
+                    ...m,
+                    text: m.text || `⚠️ **Execution Error**\n\n${err.message || 'Could not connect to FastAPI server.'}`,
+                    pipeline: {
+                      ...m.pipeline,
+                      error: err.message || 'Connection failed'
+                    },
+                    metrics: { total_response_time: errTime }
+                  };
+                }
+                return m;
+              })
             };
           }
           return s;
@@ -180,11 +327,8 @@ function App() {
 
   // Quick suggestion card click handler
   const handleSelectPrompt = (promptText, taskTarget) => {
-    if (taskTarget === 'coding') {
-      setSelectedModel(MODEL_OPTIONS[1]);
-    } else if (taskTarget === 'general') {
-      setSelectedModel(MODEL_OPTIONS[0]);
-    }
+    const targetTask = taskTarget === 'coding' ? 'coding' : 'question';
+    setSelectedTask(targetTask);
     setTimeout(() => {
       handleSendMessage(promptText);
     }, 50);
@@ -199,6 +343,9 @@ function App() {
         onSelectSession={handleSelectSession}
         onNewChat={handleNewChat}
         onDeleteSession={handleDeleteSession}
+        models={models}
+        selectedTask={selectedTask}
+        onSelectTask={handleSelectTask}
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
@@ -206,8 +353,10 @@ function App() {
       {/* Main Workspace */}
       <ChatWindow
         activeSession={activeSession}
+        selectedTask={selectedTask}
+        onSelectTask={handleSelectTask}
+        models={models}
         selectedModel={selectedModel}
-        onSelectModel={handleSelectModel}
         modelStatus={modelStatus}
         onSendMessage={handleSendMessage}
         onSelectPrompt={handleSelectPrompt}

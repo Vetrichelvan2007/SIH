@@ -8,8 +8,10 @@ import MessageInput from './MessageInput';
 
 const ChatWindow = ({
   activeSession,
+  selectedTask,
+  onSelectTask,
+  models = [],
   selectedModel,
-  onSelectModel,
   modelStatus,
   onSendMessage,
   onSelectPrompt,
@@ -48,8 +50,10 @@ const ChatWindow = ({
 
         <div className="header-right">
           <ModelSelector 
-            selectedModel={selectedModel} 
-            onSelectModel={onSelectModel} 
+            selectedTask={selectedTask}
+            onSelectTask={onSelectTask}
+            models={models}
+            selectedModel={selectedModel}
           />
 
           <ModelStatus status={modelStatus} />
@@ -60,7 +64,6 @@ const ChatWindow = ({
       {messages.length === 0 ? (
         <WelcomeScreen 
           onSelectPrompt={onSelectPrompt} 
-          selectedModel={selectedModel} 
         />
       ) : (
         <div className="chat-messages-container">
@@ -77,10 +80,10 @@ const ChatWindow = ({
               <div className="message-content-wrapper">
                 <div className="message-meta">
                   <span>Sovereign Agent</span>
-                  <span className="meta-model-tag">{selectedModel.model}</span>
+                  <span className="meta-model-tag">{selectedModel?.model || 'qwen2.5-coder'}</span>
                 </div>
                 <div className="message-bubble" style={{ color: 'var(--accent-cyan)', fontStyle: 'italic' }}>
-                  Processing locally via {selectedModel.model}...
+                  Processing locally via {selectedModel?.model || 'local Ollama model'}...
                 </div>
               </div>
             </div>

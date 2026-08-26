@@ -810,3 +810,232 @@
   color: var(--text-muted);
   margin-top: 8px;
 }
+
+/* Live Execution Pipeline Component Styling */
+.pipeline-card {
+  background: rgba(13, 18, 29, 0.95);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin: 8px 0 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pipeline-card.completed-card {
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.04);
+}
+
+.pipeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  user-select: none;
+}
+
+.pipeline-title-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pipeline-bolt {
+  color: var(--accent-cyan);
+  font-size: 14px;
+}
+
+.pipeline-status-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-emerald);
+}
+
+.pipeline-collapse-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.pipeline-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 2px;
+}
+
+.pipeline-step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.pipeline-step-item.completed {
+  color: var(--accent-emerald);
+}
+
+.pipeline-step-item.active {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.pipeline-step-item.pending {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.pipeline-step-item.error {
+  color: var(--accent-rose);
+}
+
+.step-indicator {
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.icon-completed {
+  color: var(--accent-emerald);
+}
+
+.icon-active-dot {
+  color: var(--accent-cyan);
+  animation: pulseGlow 0.8s infinite;
+}
+
+.icon-pending {
+  color: var(--text-muted);
+}
+
+.icon-error {
+  color: var(--accent-rose);
+}
+
+.pipeline-error-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(244, 63, 94, 0.12);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--accent-rose);
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.pipeline-metrics-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.metric-sub {
+  color: var(--text-muted);
+}
+
+/* Collapsed Summary Bar */
+.pipeline-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-md);
+  margin: 6px 0 10px 0;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pipeline-summary-bar:hover {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: var(--accent-emerald);
+}
+
+.summary-badge-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.badge-icon-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.2);
+  color: var(--accent-emerald);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.summary-title {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.summary-divider {
+  color: var(--text-muted);
+}
+
+.summary-model {
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.summary-badge-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--accent-emerald);
+  font-weight: 600;
+}
+
+.summary-expand-icon {
+  color: var(--text-muted);
+}
+
+/* Message Response Time Badge */
+.message-response-time-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--accent-cyan);
+  background: rgba(0, 242, 254, 0.08);
+  border: 1px solid rgba(0, 242, 254, 0.15);
+  padding: 3px 8px;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+
+.time-badge-highlight {
+  font-weight: 600;
+  color: #fff;
+}
+
