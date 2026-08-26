@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { IconChevronDown, IconCheck, IconCode, IconMessage } from './Icons';
 
-const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel }) => {
+const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel, disabled = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -19,9 +19,10 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
       {/* Quick Task Switcher Buttons */}
-      <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+      <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-subtle)', opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
         <button
           type="button"
+          disabled={disabled}
           onClick={() => onSelectTask('coding')}
           style={{
             background: selectedTask === 'coding' ? 'var(--accent-cyan-blue)' : 'transparent',
@@ -31,7 +32,7 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel 
             padding: '4px 12px',
             fontSize: '12px',
             fontWeight: 600,
-            cursor: 'pointer',
+            cursor: disabled ? 'not-allowed' : 'pointer',
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
@@ -44,6 +45,7 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel 
 
         <button
           type="button"
+          disabled={disabled}
           onClick={() => onSelectTask('question')}
           style={{
             background: selectedTask === 'question' ? 'var(--accent-cyan-blue)' : 'transparent',
@@ -53,7 +55,7 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel 
             padding: '4px 12px',
             fontSize: '12px',
             fontWeight: 600,
-            cursor: 'pointer',
+            cursor: disabled ? 'not-allowed' : 'pointer',
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
@@ -66,11 +68,12 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel 
       </div>
 
       {/* Model Status Dropdown Trigger */}
-      <div className="model-selector-wrapper" ref={dropdownRef}>
+      <div className="model-selector-wrapper" ref={dropdownRef} style={{ opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
         <button 
           type="button" 
+          disabled={disabled}
           className="model-selector-trigger" 
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={() => !disabled && setIsOpen(!isOpen)}
           aria-haspopup="true"
           aria-expanded={isOpen}
         >
@@ -78,7 +81,7 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel 
           <IconChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
         </button>
 
-        {isOpen && (
+        {isOpen && !disabled && (
           <div className="model-dropdown-menu">
             <div className="dropdown-header">
               Available Local Models

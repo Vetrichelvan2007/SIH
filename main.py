@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 
 from models.qwen_coder import stream_code_response
 from models.phi_answer import stream_answer_response
+from services.system_monitor import get_system_status
+from services.model_manager import switch_model_stream
 
 # File path for local conversation storage
 CONVERSATION_FILE = Path(__file__).parent / "conversation.json"
@@ -112,8 +114,8 @@ def check_ollama_models_availability() -> List[dict]:
 # Initialize FastAPI App
 app = FastAPI(
     title="Sovereign AI Workbench Controller",
-    description="Central controller for routing task requests with SSE streaming and pipeline status events",
-    version="3.0.0"
+    description="Central controller for routing tasks, monitoring telemetry, and managing model lifecycles",
+    version="4.0.0"
 )
 
 # Enable CORS for React Frontend
@@ -137,6 +139,9 @@ class ChatRequest(BaseModel):
     query: Optional[str] = Field(None, description="Backward compatible alias for user prompt")
     task: str = Field("coding", description="Target task: 'coding' or 'question'/'general'")
 
+class ModelSwitchRequest(BaseModel):
+    model: str = Field(..., description="Target model ID to switch and verify (e.g., 'qwen2.5-coder' or 'phi4-mini')")
+
 def sse_format(event_data: dict) -> str:
     return f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
 
@@ -149,6 +154,34 @@ def health_check():
 def get_available_models():
     """Endpoint returning local Ollama model availability for qwen2.5-coder and phi4-mini."""
     return {"models": check_ollama_models_availability()}
+
+@app.get("/api/system/status")
+def system_status_endpoint():
+    """
+    Live real-time system metrics endpoint returning GPU VRAM, GPU utilization,
+    CPU usage %, system RAM, and running Ollama models.
+    """
+    return get_system_status()
+
+@app.post("/api/models/switch")
+def switch_model_endpoint(request: ModelSwitchRequest):
+    """
+    Real model transition API:
+    1. Inspects currently loaded VRAM models.
+    2. If target model is already loaded, returns ready state immediately.
+    3. Unloads previous model using keep_alive: 0 and verifies memory release.
+    4. Loads new model using keep_alive: '1h' and verifies VRAM allocation.
+    Returns live SSE event stream.
+    """
+    return StreamingResponse(
+        switch_model_stream(request.model),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 @app.post("/new-chat")
 def new_chat_endpoint():

@@ -9,9 +9,32 @@ const Sidebar = ({
   models = [],
   selectedTask,
   onSelectTask,
+  systemStatus = null,
   isMobileOpen,
   onCloseMobile
 }) => {
+  // Parse live metrics safely
+  const gpu = systemStatus?.gpu;
+  const cpu = systemStatus?.cpu;
+  const ram = systemStatus?.ram;
+  const ollama = systemStatus?.ollama;
+
+  const gpuName = gpu?.available ? gpu.name : 'Local GPU / CPU';
+  const vramUsedGb = gpu?.available ? (gpu.vram_used_mb / 1024).toFixed(1) : '0.0';
+  const vramTotalGb = gpu?.available ? (gpu.vram_total_mb / 1024).toFixed(1) : '0.0';
+  const vramPercent = gpu?.available && gpu.vram_total_mb > 0 
+    ? Math.min(100, Math.round((gpu.vram_used_mb / gpu.vram_total_mb) * 100)) 
+    : 0;
+
+  const ramUsedGb = ram?.used_mb ? (ram.used_mb / 1024).toFixed(1) : '0.0';
+  const ramTotalGb = ram?.total_mb ? (ram.total_mb / 1024).toFixed(1) : '0.0';
+
+  const isOllamaConnected = ollama?.status === 'running';
+
+  const activeModelDisplay = systemStatus?.active_model 
+    ? (systemStatus.active_model.includes('qwen') ? 'Qwen2.5-Coder' : (systemStatus.active_model.includes('phi') ? 'Phi-4 Mini' : systemStatus.active_model))
+    : 'None Loaded';
+
   return (
     <aside className={`sidebar ${isMobileOpen ? 'mobile-open' : ''}`}>
       {/* Brand Header */}
@@ -129,30 +152,74 @@ const Sidebar = ({
         })}
       </div>
 
-      {/* Footer System Specs */}
+      {/* Real Live System Monitor (Local Compute Node) */}
       <div className="sidebar-footer">
         <div className="system-status-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)' }}>
-            <IconCpu size={14} style={{ color: 'var(--accent-cyan)' }} />
-            <span>Local Compute Node</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <IconCpu size={14} style={{ color: 'var(--accent-cyan)' }} />
+              <span>LOCAL COMPUTE NODE</span>
+            </div>
+            <span style={{ fontSize: '10px', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span className="brand-badge-dot"></span> LIVE
+            </span>
           </div>
+
+          {/* GPU Info */}
+          {gpu?.available && (
+            <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={gpuName}>
+              GPU: {gpuName}
+            </div>
+          )}
           
           <div className="system-metric">
             <span>GPU VRAM</span>
-            <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>3.8 / 16 GB</span>
+            <span style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>{vramUsedGb} / {vramTotalGb} GB</span>
           </div>
           <div className="metric-bar">
-            <div className="metric-fill" style={{ width: '24%' }}></div>
+            <div className="metric-fill" style={{ width: `${vramPercent}%` }}></div>
+          </div>
+
+          <div className="system-metric" style={{ marginTop: '2px' }}>
+            <span>GPU UTILIZATION</span>
+            <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{gpu?.utilization || 0}%</span>
+          </div>
+
+          <div className="system-metric">
+            <span>CPU USAGE</span>
+            <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{cpu?.usage || 0}%</span>
+          </div>
+
+          <div className="system-metric">
+            <span>SYSTEM RAM</span>
+            <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{ramUsedGb} / {ramTotalGb} GB</span>
           </div>
 
           <div className="system-metric" style={{ marginTop: '4px' }}>
-            <span>Network Perimeter</span>
-            <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>AIR-GAPPED</span>
+            <span>ACTIVE MODEL</span>
+            <span style={{ color: active_model_name_color(activeModelDisplay), fontWeight: 600 }}>● {activeModelDisplay}</span>
+          </div>
+
+          <div className="system-metric">
+            <span>OLLAMA</span>
+            <span style={{ color: isOllamaConnected ? 'var(--accent-emerald)' : 'var(--accent-rose)', fontWeight: 600 }}>
+              ● {isOllamaConnected ? 'CONNECTED' : 'DISCONNECTED'}
+            </span>
+          </div>
+
+          <div className="system-metric" style={{ marginTop: '2px', fontSize: '10px', color: 'var(--text-muted)' }}>
+            <span>PERIMETER</span>
+            <span style={{ color: 'var(--accent-cyan)' }}>LOCAL INFERENCE</span>
           </div>
         </div>
       </div>
     </aside>
   );
 };
+
+function active_model_name_color(name) {
+  if (name === 'None Loaded') return 'var(--text-muted)';
+  return 'var(--accent-cyan)';
+}
 
 export default Sidebar;

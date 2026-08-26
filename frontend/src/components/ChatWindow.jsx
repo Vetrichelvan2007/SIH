@@ -5,6 +5,7 @@ import ModelStatus from './ModelStatus';
 import WelcomeScreen from './WelcomeScreen';
 import ChatMessage from './ChatMessage';
 import MessageInput from './MessageInput';
+import ModelTransitionPanel from './ModelTransitionPanel';
 
 const ChatWindow = ({
   activeSession,
@@ -15,7 +16,10 @@ const ChatWindow = ({
   modelStatus,
   onSendMessage,
   onSelectPrompt,
-  onToggleSidebar
+  onToggleSidebar,
+  isSwitchingModel = false,
+  modelSwitchLogs = [],
+  targetSwitchModelName = ''
 }) => {
   const messagesEndRef = useRef(null);
 
@@ -27,7 +31,7 @@ const ChatWindow = ({
   }, [activeSession?.messages, modelStatus]);
 
   const messages = activeSession?.messages || [];
-  const isGenerating = modelStatus === 'generating' || modelStatus === 'loading';
+  const isGenerating = modelStatus === 'generating' || modelStatus === 'loading' || isSwitchingModel;
 
   return (
     <main className="chat-workspace">
@@ -54,11 +58,21 @@ const ChatWindow = ({
             onSelectTask={onSelectTask}
             models={models}
             selectedModel={selectedModel}
+            disabled={isSwitchingModel || isGenerating}
           />
 
-          <ModelStatus status={modelStatus} />
+          <ModelStatus status={isSwitchingModel ? 'loading' : modelStatus} />
         </div>
       </header>
+
+      {/* Model Transition Modal when switching local models */}
+      {isSwitchingModel && (
+        <ModelTransitionPanel 
+          targetModelName={targetSwitchModelName || selectedModel?.name || 'Qwen2.5-Coder'}
+          logs={modelSwitchLogs}
+          isComplete={modelSwitchLogs.some((l) => l.status === 'ready')}
+        />
+      )}
 
       {/* Main Conversation Stream / Welcome Screen */}
       {messages.length === 0 ? (
@@ -72,7 +86,7 @@ const ChatWindow = ({
           ))}
 
           {/* Typing Indicator pulse during response generation */}
-          {isGenerating && (
+          {isGenerating && !isSwitchingModel && (
             <div className="message-row ai animate-fade-in">
               <div className="avatar ai">
                 <span>AI</span>
@@ -80,10 +94,10 @@ const ChatWindow = ({
               <div className="message-content-wrapper">
                 <div className="message-meta">
                   <span>Sovereign Agent</span>
-                  <span className="meta-model-tag">{selectedModel?.model || 'qwen2.5-coder'}</span>
+                  <span className="meta-model-tag">{selectedModel?.name || selectedModel?.model || 'Qwen2.5-Coder'}</span>
                 </div>
                 <div className="message-bubble" style={{ color: 'var(--accent-cyan)', fontStyle: 'italic' }}>
-                  Processing locally via {selectedModel?.model || 'local Ollama model'}...
+                  Processing locally via {selectedModel?.name || selectedModel?.model || 'local Ollama model'}...
                 </div>
               </div>
             </div>

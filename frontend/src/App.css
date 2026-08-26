@@ -1039,3 +1039,122 @@
   color: #fff;
 }
 
+/* Model Transition Modal & Overlay */
+.model-transition-overlay {
+  position: absolute;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  width: 90%;
+  max-width: 520px;
+}
+
+.model-transition-card {
+  background: rgba(13, 18, 29, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 242, 254, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.transition-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.transition-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+
+.transition-bolt {
+  color: var(--accent-cyan);
+  font-size: 16px;
+  animation: pulseGlow 1s infinite;
+}
+
+.transition-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+  text-transform: uppercase;
+}
+
+.transition-badge.switching {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-amber);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.transition-badge.ready {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-emerald);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.transition-subtitle {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.transition-logs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.transition-log-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.transition-log-item.active {
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.transition-log-item.finished {
+  color: var(--accent-emerald);
+}
+
+.transition-step-icon {
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-pulse {
+  color: var(--accent-cyan);
+  animation: pulseGlow 0.6s infinite;
+}
+
+.transition-footer-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+}
+
+

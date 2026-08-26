@@ -12,7 +12,15 @@ function App() {
   const [modelStatus, setModelStatus] = useState('ready'); // 'ready' | 'loading' | 'generating'
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
-  // Fetch live model availability from backend on mount
+  // Live Real-Time System Telemetry State
+  const [systemStatus, setSystemStatus] = useState(null);
+
+  // Model Switching Transition State
+  const [isSwitchingModel, setIsSwitchingModel] = useState(false);
+  const [modelSwitchLogs, setModelSwitchLogs] = useState([]);
+  const [targetSwitchModelName, setTargetSwitchModelName] = useState('');
+
+  // 1. Fetch live model availability from backend on mount
   useEffect(() => {
     const fetchAvailableModels = async () => {
       try {
@@ -31,15 +39,101 @@ function App() {
     fetchAvailableModels();
   }, []);
 
+  // 2. Poll live real-time system status every 2 seconds with clean useEffect interval cleanup
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/system/status");
+        if (res.ok) {
+          const data = await res.json();
+          setSystemStatus(data);
+        }
+      } catch (err) {
+        console.warn("System telemetry poll offline:", err);
+        setSystemStatus((prev) => (prev ? { ...prev, ollama: { status: 'offline', loaded_models: [] } } : null));
+      }
+    };
+
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Compute selected model object based on current selectedTask
   const selectedModel = models.find((m) => m.task === selectedTask) || models[0];
 
   // Get active session object
   const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0];
 
-  // Handler to switch selected task ('coding' vs 'question')
-  const handleSelectTask = (taskKey) => {
-    setSelectedTask(taskKey);
+  // Real Model Lifecycle Transition Handler (POST /api/models/switch)
+  const handleSelectTask = async (taskKey) => {
+    if (isSwitchingModel || modelStatus !== 'ready') return;
+
+    const targetModelId = taskKey === 'coding' ? 'qwen2.5-coder' : 'phi4-mini';
+    const targetModelDisplayName = taskKey === 'coding' ? 'Qwen2.5-Coder' : 'Phi-4 Mini';
+
+    setTargetSwitchModelName(targetModelDisplayName);
+    setIsSwitchingModel(true);
+    setModelSwitchLogs([
+      { status: 'checking_current_model', message: `Checking current VRAM allocation for ${targetModelDisplayName}...` }
+    ]);
+
+    try {
+      const response = await fetch("http://localhost:8000/api/models/switch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: targetModelId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend returned HTTP status ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+
+          const jsonString = trimmed.replace(/^data:\s*/, "");
+          if (!jsonString) continue;
+
+          try {
+            const event = JSON.parse(jsonString);
+            if (event.type === 'model_switch') {
+              setModelSwitchLogs((prev) => [...prev, event]);
+            }
+          } catch (err) {
+            console.warn("Failed to parse model switch SSE JSON line:", err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error switching models:", err);
+      setModelSwitchLogs((prev) => [
+        ...prev,
+        { status: 'error', message: `✕ Transition failed: ${err.message}` }
+      ]);
+    } finally {
+      setSelectedTask(taskKey);
+      setTimeout(() => {
+        setIsSwitchingModel(false);
+      }, 1000);
+    }
   };
 
   // Handler to create a brand new chat session
@@ -79,7 +173,7 @@ function App() {
 
   // Handler to send a chat message and consume SSE stream
   const handleSendMessage = async (userText) => {
-    if (!userText.trim() || modelStatus !== 'ready') return;
+    if (!userText.trim() || modelStatus !== 'ready' || isSwitchingModel) return;
 
     const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const userMsgId = `user-${Date.now()}`;
@@ -328,10 +422,10 @@ function App() {
   // Quick suggestion card click handler
   const handleSelectPrompt = (promptText, taskTarget) => {
     const targetTask = taskTarget === 'coding' ? 'coding' : 'question';
-    setSelectedTask(targetTask);
+    handleSelectTask(targetTask);
     setTimeout(() => {
       handleSendMessage(promptText);
-    }, 50);
+    }, 1500);
   };
 
   return (
@@ -346,6 +440,7 @@ function App() {
         models={models}
         selectedTask={selectedTask}
         onSelectTask={handleSelectTask}
+        systemStatus={systemStatus}
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
       />
@@ -361,6 +456,9 @@ function App() {
         onSendMessage={handleSendMessage}
         onSelectPrompt={handleSelectPrompt}
         onToggleSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
+        isSwitchingModel={isSwitchingModel}
+        modelSwitchLogs={modelSwitchLogs}
+        targetSwitchModelName={targetSwitchModelName}
       />
     </div>
   );
