@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Environment files
+.env
+
+# Conversation data
+conversation.json
+
+# Node
+frontend/node_modules/
+
+# Build files
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
