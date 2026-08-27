@@ -30,6 +30,85 @@ function App() {
     status: null
   });
 
+  // Helper to fetch live summary of all chats from backend /api/chats
+  const fetchChatsList = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/chats");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.chats && Array.isArray(data.chats)) {
+          return data.chats.map(c => ({
+            id: c.chat_id,
+            title: c.title || 'New Conversation',
+            updatedAt: c.updated_at ? new Date(c.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
+            messages: []
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch chats from backend:", err);
+    }
+    return [];
+  };
+
+  // Helper to load full conversation detail for a given chat_id
+  const loadChatDetails = async (chatId) => {
+    if (!chatId) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/chats/${chatId}`);
+      if (res.ok) {
+        const data = await res.json();
+        const formattedMessages = (data.messages || []).map(m => {
+          const isUser = m.role === 'user';
+          const timeStr = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now';
+          return {
+            id: m.message_id,
+            sender: isUser ? 'user' : 'ai',
+            text: m.content,
+            timestamp: timeStr,
+            model: m.model_used || 'phi4-mini',
+            modelName: m.model_used || 'Phi-4 Mini',
+            route: m.route,
+            metrics: m.response_time ? { total_response_time: m.response_time } : null,
+            pipeline: !isUser ? {
+              stage: 'completed',
+              completedStages: ['query_received', 'backend_processing', 'model_selected', 'completed'],
+              taskLabel: m.route ? `Route [${m.route}]` : 'General',
+              modelName: m.model_used || 'Phi-4 Mini',
+              isComplete: true,
+              metrics: m.response_time ? { total_response_time: m.response_time } : null,
+              error: null
+            } : null
+          };
+        });
+
+        setSessions(prev => {
+          const exists = prev.some(s => s.id === chatId);
+          if (exists) {
+            return prev.map(s => s.id === chatId ? { ...s, title: data.title, messages: formattedMessages } : s);
+          } else {
+            return [{ id: data.chat_id, title: data.title, updatedAt: data.updated_at, messages: formattedMessages }, ...prev];
+          }
+        });
+      }
+    } catch (err) {
+      console.warn(`Could not load details for chat ${chatId}:`, err);
+    }
+  };
+
+  // Refresh sidebar chat list while preserving currently loaded active messages
+  const refreshChatList = async () => {
+    const list = await fetchChatsList();
+    if (list.length > 0) {
+      setSessions(prev => {
+        return list.map(item => {
+          const existing = prev.find(p => p.id === item.id);
+          return existing ? { ...item, messages: existing.messages } : item;
+        });
+      });
+    }
+  };
+
   // Helper to fetch live detailed model status from /api/models/status
   const fetchModelsStatus = async () => {
     try {
@@ -43,7 +122,7 @@ function App() {
     }
   };
 
-  // 1. Fetch live model availability and Multi-Model status from backend on mount
+  // 1. Initial Mount: Load model availability, multi-model status, and persistent SQLite chat history
   useEffect(() => {
     const fetchAvailableModels = async () => {
       try {
@@ -71,9 +150,33 @@ function App() {
       }
     };
 
+    const initChatHistory = async () => {
+      const chatList = await fetchChatsList();
+      if (chatList.length > 0) {
+        setSessions(chatList);
+        const savedActiveId = localStorage.getItem('active_chat_id');
+        const targetId = (savedActiveId && chatList.some(c => c.id === savedActiveId))
+          ? savedActiveId
+          : chatList[0].id;
+
+        setActiveSessionId(targetId);
+        loadChatDetails(targetId);
+      } else {
+        const freshId = `session-${Date.now()}`;
+        const freshSession = {
+          id: freshId,
+          title: 'New Conversation',
+          messages: []
+        };
+        setSessions([freshSession]);
+        setActiveSessionId(freshId);
+      }
+    };
+
     fetchAvailableModels();
     fetchMultiModelStatus();
     fetchModelsStatus();
+    initChatHistory();
   }, []);
 
   // Handler to toggle Multi-Model Mode ON/OFF
@@ -86,10 +189,9 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: targetState })
       });
-      // Immediately refresh model status on toggle
       fetchModelsStatus();
     } catch (err) {
-        console.error("Failed to toggle Multi-Model Mode on backend:", err);
+      console.error("Failed to toggle Multi-Model Mode on backend:", err);
     }
   };
 
@@ -192,37 +294,61 @@ function App() {
   };
 
   // Handler to create a brand new chat session
-  const handleNewChat = async () => {
+  const handleNewChat = () => {
     const newId = `session-${Date.now()}`;
     const newSession = {
       id: newId,
       title: 'New Conversation',
-      task: selectedTask,
-      model: selectedModel?.id || 'qwen2.5-coder',
-      updatedAt: 'Just now',
       messages: []
     };
     setSessions((prev) => [newSession, ...prev]);
     setActiveSessionId(newId);
-
-    try {
-      await fetch("http://localhost:8000/new-chat", { method: "POST" });
-    } catch (err) {
-      console.warn("Could not reset backend conversation context:", err);
-    }
+    localStorage.setItem('active_chat_id', newId);
   };
 
   // Handler to switch active session
   const handleSelectSession = (id) => {
     setActiveSessionId(id);
+    localStorage.setItem('active_chat_id', id);
+    loadChatDetails(id);
   };
 
   // Handler to delete a session
-  const handleDeleteSession = (id) => {
+  const handleDeleteSession = async (id) => {
+    try {
+      await fetch(`http://localhost:8000/api/chats/${id}`, { method: "DELETE" });
+    } catch (err) {
+      console.warn(`Failed to delete chat ${id} on backend:`, err);
+    }
+
     const remaining = sessions.filter((s) => s.id !== id);
     setSessions(remaining);
-    if (activeSessionId === id && remaining.length > 0) {
-      setActiveSessionId(remaining[0].id);
+
+    if (activeSessionId === id) {
+      if (remaining.length > 0) {
+        const nextId = remaining[0].id;
+        setActiveSessionId(nextId);
+        localStorage.setItem('active_chat_id', nextId);
+        loadChatDetails(nextId);
+      } else {
+        handleNewChat();
+      }
+    }
+  };
+
+  // Handler to rename a session title
+  const handleRenameSession = async (id, newTitle) => {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, title: newTitle } : s))
+    );
+    try {
+      await fetch(`http://localhost:8000/api/chats/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: newTitle })
+      });
+    } catch (err) {
+      console.warn(`Failed to rename chat ${id} on backend:`, err);
     }
   };
 
@@ -234,6 +360,7 @@ function App() {
     const userMsgId = `user-${Date.now()}`;
     const aiMsgId = `ai-${Date.now()}`;
     const reqId = `req-${Date.now()}`;
+    const currentChatId = activeSessionId;
 
     // Reset request-specific execution state at start of EVERY request
     setCurrentExecution({
@@ -275,20 +402,21 @@ function App() {
       timestamp: timeString
     };
 
-    // Auto-title empty sessions
+    // Auto-title empty sessions (limit ~35 chars)
     let updatedTitle = activeSession?.title;
-    if (!activeSession || activeSession.title === 'New Conversation' || activeSession.messages.length === 0) {
-      updatedTitle = userText.length > 32 ? `${userText.slice(0, 32)}...` : userText;
+    if (!activeSession || activeSession.title === 'New Conversation' || !activeSession.messages || activeSession.messages.length === 0) {
+      const cleanPrompt = userText.trim();
+      updatedTitle = cleanPrompt.length > 35 ? `${cleanPrompt.slice(0, 35).trim()}...` : cleanPrompt;
     }
 
     // 1. Append user & AI placeholder message to active session
     setSessions((prev) =>
       prev.map((s) => {
-        if (s.id === activeSessionId) {
+        if (s.id === currentChatId) {
           return {
             ...s,
             title: updatedTitle,
-            messages: [...s.messages, userMessage, initialAiMessage]
+            messages: [...(s.messages || []), userMessage, initialAiMessage]
           };
         }
         return s;
@@ -301,7 +429,7 @@ function App() {
     const startTime = performance.now();
 
     try {
-      // 3. Initiate SSE connection to FastAPI backend
+      // 3. Initiate SSE connection to FastAPI backend with chat_id
       const response = await fetch("http://localhost:8000/chat", {
         method: "POST",
         headers: {
@@ -310,7 +438,8 @@ function App() {
         body: JSON.stringify({
           message: userText,
           task: selectedTask,
-          multi_model_mode: multiModelMode
+          multi_model_mode: multiModelMode,
+          chat_id: currentChatId
         })
       });
 
@@ -341,9 +470,6 @@ function App() {
           try {
             const event = JSON.parse(jsonString);
 
-            // Debug Logging
-            console.log("[CHAT EVENT]", event);
-
             // Handle SSE Event Types
             if (event.type === 'status') {
               if (event.route) {
@@ -351,17 +477,12 @@ function App() {
               }
               if (event.model_name || event.model) {
                 const newModelName = event.model_name || event.model;
-                setCurrentExecution((prev) => {
-                  const updated = { ...prev, selectedModel: newModelName, status: event.stage };
-                  console.log("[EXECUTION STATE]", updated);
-                  console.log("[SYSTEM ACTIVE MODEL]", systemStatus?.active_model);
-                  return updated;
-                });
+                setCurrentExecution((prev) => ({ ...prev, selectedModel: newModelName, status: event.stage }));
               }
 
               setSessions((prev) =>
                 prev.map((s) => {
-                  if (s.id === activeSessionId) {
+                  if (s.id === currentChatId) {
                     return {
                       ...s,
                       messages: s.messages.map((m) => {
@@ -394,7 +515,7 @@ function App() {
             } else if (event.type === 'token') {
               setSessions((prev) =>
                 prev.map((s) => {
-                  if (s.id === activeSessionId) {
+                  if (s.id === currentChatId) {
                     return {
                       ...s,
                       messages: s.messages.map((m) => {
@@ -424,7 +545,7 @@ function App() {
 
               setSessions((prev) =>
                 prev.map((s) => {
-                  if (s.id === activeSessionId) {
+                  if (s.id === currentChatId) {
                     return {
                       ...s,
                       messages: s.messages.map((m) => {
@@ -452,10 +573,13 @@ function App() {
                   return s;
                 })
               );
+
+              // Refresh chat history list to update timestamps and move active chat to top
+              refreshChatList();
             } else if (event.type === 'error') {
               setSessions((prev) =>
                 prev.map((s) => {
-                  if (s.id === activeSessionId) {
+                  if (s.id === currentChatId) {
                     return {
                       ...s,
                       messages: s.messages.map((m) => {
@@ -488,7 +612,7 @@ function App() {
 
       setSessions((prev) =>
         prev.map((s) => {
-          if (s.id === activeSessionId) {
+          if (s.id === currentChatId) {
             return {
               ...s,
               messages: s.messages.map((m) => {
@@ -533,6 +657,7 @@ function App() {
         onSelectSession={handleSelectSession}
         onNewChat={handleNewChat}
         onDeleteSession={handleDeleteSession}
+        onRenameSession={handleRenameSession}
         models={models}
         selectedTask={selectedTask}
         onSelectTask={handleSelectTask}

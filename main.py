@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from pathlib import Path
 from typing import Optional, List
 import requests
@@ -12,6 +13,7 @@ from models.qwen_coder import stream_code_response
 from models.phi_answer import stream_answer_response
 from services.system_monitor import get_system_status, get_detailed_models_status
 from services.model_manager import switch_model_stream
+import services.chat_db as chat_db
 from services.router_service import (
     get_multi_model_mode,
     set_multi_model_mode,
@@ -24,6 +26,9 @@ from services.router_service import (
     ROUTE_PRIORITY,
     VALID_ROUTES
 )
+
+# Initialize SQLite Chat Database
+chat_db.init_db()
 
 # File path for local conversation storage
 CONVERSATION_FILE = Path(__file__).parent / "conversation.json"
@@ -154,6 +159,21 @@ class ChatRequest(BaseModel):
     query: Optional[str] = Field(None, description="Backward compatible alias for user prompt")
     task: str = Field("coding", description="Target task: 'coding' or 'question'/'general'")
     multi_model_mode: Optional[bool] = Field(None, description="Optional override for Multi-Model Mode")
+    chat_id: Optional[str] = Field(None, description="Target chat session ID")
+
+class CreateChatRequest(BaseModel):
+    chat_id: Optional[str] = Field(None, description="Optional unique chat ID")
+    title: Optional[str] = Field(None, description="Optional initial chat title")
+
+class RenameChatRequest(BaseModel):
+    title: str = Field(..., description="New title for the chat session")
+
+class AddMessageRequest(BaseModel):
+    role: str = Field(..., description="Role: 'user' or 'assistant'")
+    content: str = Field(..., description="Message content text")
+    model_used: Optional[str] = None
+    route: Optional[str] = None
+    response_time: Optional[float] = None
 
 class ModelSwitchRequest(BaseModel):
     model: str = Field(..., description="Target model ID to switch and verify (e.g., 'qwen2.5-coder' or 'phi4-mini')")
@@ -167,6 +187,58 @@ class MultiModelConfigRequest(BaseModel):
 
 def sse_format(event_data: dict) -> str:
     return f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+# ==================================================
+# CHAT HISTORY REST APIS (SQLITE PERSISTENCE)
+# ==================================================
+
+@app.get("/api/chats")
+def get_chats_endpoint():
+    """Returns list of all saved chats ordered by updated_at descending."""
+    return {"chats": chat_db.get_all_chats()}
+
+@app.post("/api/chats")
+def create_chat_endpoint(req: CreateChatRequest):
+    """Creates a new empty chat session."""
+    chat = chat_db.create_chat(chat_id=req.chat_id, title=req.title)
+    return {"status": "created", "chat": chat}
+
+@app.get("/api/chats/{chat_id}")
+def get_chat_endpoint(chat_id: str):
+    """Fetches complete chat session by ID including all messages."""
+    chat = chat_db.get_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat '{chat_id}' not found.")
+    return chat
+
+@app.delete("/api/chats/{chat_id}")
+def delete_chat_endpoint(chat_id: str):
+    """Deletes a chat session by ID."""
+    deleted = chat_db.delete_chat(chat_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat '{chat_id}' not found.")
+    return {"status": "deleted", "chat_id": chat_id}
+
+@app.patch("/api/chats/{chat_id}")
+def rename_chat_endpoint(chat_id: str, req: RenameChatRequest):
+    """Renames an existing chat session."""
+    chat = chat_db.update_chat_title(chat_id, req.title)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat '{chat_id}' not found.")
+    return {"status": "renamed", "chat": chat}
+
+@app.post("/api/chats/{chat_id}/messages")
+def add_message_endpoint(chat_id: str, req: AddMessageRequest):
+    """Appends a message to the specified chat session."""
+    msg = chat_db.add_message(
+        chat_id=chat_id,
+        role=req.role,
+        content=req.content,
+        model_used=req.model_used,
+        route=req.route,
+        response_time=req.response_time
+    )
+    return {"status": "saved", "message": msg}
 
 @app.get("/health")
 def health_check():
@@ -263,6 +335,7 @@ def chat_endpoint(request: ChatRequest):
     Streaming chat endpoint emitting real Server-Sent Events (SSE):
     - Single-Model Mode (OFF - DEFAULT): 0 routing overhead, direct execution.
     - Multi-Model Mode (ON - OPTIONAL): Qwen2.5 1.5B intent router, RAM/VRAM safety checks, lazy loading, priority hierarchy.
+    - Persistent Chat History: Automatically persists messages and manages context window.
     """
     user_text = request.message or request.query
     if not user_text or not user_text.strip():
@@ -273,19 +346,24 @@ def chat_endpoint(request: ChatRequest):
 
     use_multi_model = request.multi_model_mode if request.multi_model_mode is not None else get_multi_model_mode()
     req_task = (request.task or "coding").lower().strip()
+    target_chat_id = request.chat_id or str(uuid.uuid4())
+
+    # Save user message to persistent SQLite database
+    chat_db.add_message(chat_id=target_chat_id, role="user", content=user_text)
 
     def generate_events():
         # Initialize task_clean at the top of generate_events scope to guarantee it exists in all paths
         task_clean = "coding" if req_task in ["coding", "code"] else "general"
+        selected_route = "CODING" if task_clean == "coding" else "GENERAL"
         start_time = time.perf_counter()
 
         try:
             # 1. Query received
-            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received"})
+            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received", "chat_id": target_chat_id})
 
             # 2. Sent to backend / processing
             backend_start = time.perf_counter()
-            yield sse_format({"type": "status", "stage": "backend_processing", "message": "Request sent to FastAPI backend"})
+            yield sse_format({"type": "status", "stage": "backend_processing", "message": "Request sent to FastAPI backend", "chat_id": target_chat_id})
 
             if not use_multi_model:
                 # ==================================================
@@ -297,14 +375,14 @@ def chat_endpoint(request: ChatRequest):
                 model_id = "qwen2.5-coder" if is_coding else "phi4-mini"
                 model_name = "Qwen2.5-Coder" if is_coding else "Phi-4 Mini"
 
-                yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "multi_model": False})
-                yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name})
+                yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "multi_model": False, "chat_id": target_chat_id})
+                yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name, "chat_id": target_chat_id})
             else:
                 # ==================================================
                 # 2. MULTI-MODEL MODE (ON - OPTIONAL)
                 # ROUTER: Qwen2.5 1.5B with Memory Management & Safety Verification
                 # ==================================================
-                yield sse_format({"type": "status", "stage": "multi_model_routing", "message": "Multi-Model Mode Active: Preparing Qwen2.5 1.5B Router...", "multi_model": True})
+                yield sse_format({"type": "status", "stage": "multi_model_routing", "message": "Multi-Model Mode Active: Preparing Qwen2.5 1.5B Router...", "multi_model": True, "chat_id": target_chat_id})
 
                 # Step 1 & 2: Ensure Router is loaded (unloads current inference model if memory is insufficient)
                 router_loaded, router_msg = ensure_router_loaded()
@@ -316,7 +394,8 @@ def chat_endpoint(request: ChatRequest):
                     "target": "Router (qwen2.5:1.5b)",
                     "is_safe": router_safe,
                     "message": router_msg,
-                    "metrics": router_metrics
+                    "metrics": router_metrics,
+                    "chat_id": target_chat_id
                 })
 
                 # Step 3: Classify query via Router (Qwen2.5 1.5B with fallback)
@@ -373,7 +452,8 @@ def chat_endpoint(request: ChatRequest):
                     "route": selected_route,
                     "priority": "DOCUMENT > RAG > CODING > REASONING > GENERAL",
                     "message": f"Route classified: {selected_route}",
-                    "router_info": router_info
+                    "router_info": router_info,
+                    "chat_id": target_chat_id
                 })
 
                 task_label = f"Multi-Model Route [{selected_route}]"
@@ -386,7 +466,8 @@ def chat_endpoint(request: ChatRequest):
                     yield sse_format({
                         "type": "status",
                         "stage": "resource_fallback",
-                        "message": f"⚠️ Safety limit reached for {target_model_name}: {spec_msg}. Falling back safely to default active model."
+                        "message": f"⚠️ Safety limit reached for {target_model_name}: {spec_msg}. Falling back safely to default active model.",
+                        "chat_id": target_chat_id
                     })
                     model_id = "phi4-mini"
                     model_name = "Phi-4 Mini"
@@ -394,8 +475,8 @@ def chat_endpoint(request: ChatRequest):
                     model_id = target_model_id
                     model_name = target_model_name
 
-                yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "route": selected_route, "multi_model": True})
-                yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name})
+                yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "route": selected_route, "multi_model": True, "chat_id": target_chat_id})
+                yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name, "chat_id": target_chat_id})
 
             # Safe Route Checks
             is_coding = task_clean == "coding"
@@ -404,30 +485,33 @@ def chat_endpoint(request: ChatRequest):
             is_document = task_clean == "document"
             is_general = task_clean == "general"
 
-            # Load conversation history
-            history = load_conversation()
-            user_msg = {"role": "user", "content": user_text}
-            history.append(user_msg)
+            # Context Window Trimming: Retrieve last N messages for model prompt from persistent SQLite chat DB
+            model_messages = chat_db.get_trimmed_model_messages(target_chat_id, max_messages=15)
+            
+            # Legacy file backup
+            legacy_history = load_conversation()
+            legacy_history.append({"role": "user", "content": user_text})
+            
             backend_overhead_time = round(time.perf_counter() - backend_start, 3)
 
             # Connected to local Ollama API
-            yield sse_format({"type": "status", "stage": "ollama_connecting", "message": "Connecting to local Ollama API"})
+            yield sse_format({"type": "status", "stage": "ollama_connecting", "message": "Connecting to local Ollama API", "chat_id": target_chat_id})
 
             # Model processing locally
-            yield sse_format({"type": "status", "stage": "ollama_processing", "message": f"{model_name} is processing locally..."})
+            yield sse_format({"type": "status", "stage": "ollama_processing", "message": f"{model_name} is processing locally...", "chat_id": target_chat_id})
 
             model_start = time.perf_counter()
             accumulated_tokens = []
 
             if is_coding:
-                stream = stream_code_response(history)
+                stream = stream_code_response(model_messages)
             else:
-                stream = stream_answer_response(history)
+                stream = stream_answer_response(model_messages)
 
             first_chunk = True
             for token in stream:
                 if first_chunk:
-                    yield sse_format({"type": "status", "stage": "receiving_response", "message": "Receiving model response..."})
+                    yield sse_format({"type": "status", "stage": "receiving_response", "message": "Receiving model response...", "chat_id": target_chat_id})
                     first_chunk = False
 
                 accumulated_tokens.append(token)
@@ -438,16 +522,26 @@ def chat_endpoint(request: ChatRequest):
 
             full_response = "".join(accumulated_tokens)
 
-            # Update conversation history
-            assistant_msg = {"role": "assistant", "content": full_response}
-            history.append(assistant_msg)
-            save_conversation(history)
+            # Update legacy conversation.json
+            legacy_history.append({"role": "assistant", "content": full_response})
+            save_conversation(legacy_history)
+
+            # Save assistant response to persistent SQLite DB
+            chat_db.add_message(
+                chat_id=target_chat_id,
+                role="assistant",
+                content=full_response,
+                model_used=model_name,
+                route=selected_route,
+                response_time=total_time
+            )
 
             # Completed event with timing metrics
-            yield sse_format({"type": "status", "stage": "completed", "message": "Response completed"})
+            yield sse_format({"type": "status", "stage": "completed", "message": "Response completed", "chat_id": target_chat_id})
 
             yield sse_format({
                 "type": "complete",
+                "chat_id": target_chat_id,
                 "model": model_id,
                 "model_name": model_name,
                 "multi_model_mode": use_multi_model,

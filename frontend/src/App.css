@@ -239,6 +239,72 @@
   background: rgba(244, 63, 94, 0.15);
 }
 
+.history-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.history-item:hover .history-item-actions,
+.history-item.editing .history-item-actions,
+.history-item.confirming .history-item-actions {
+  opacity: 1;
+}
+
+.history-action-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.history-action-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.history-action-btn.delete:hover {
+  color: var(--accent-rose);
+  background: rgba(244, 63, 94, 0.2);
+}
+
+.history-action-btn.confirm-delete {
+  color: #ffffff;
+  background: #e11d48;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.history-action-btn.cancel-delete {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.history-edit-input {
+  background: #0f172a;
+  border: 1px solid var(--accent-cyan);
+  color: var(--text-primary);
+  font-size: 12px;
+  border-radius: 4px;
+  padding: 3px 6px;
+  outline: none;
+  width: 140px;
+  font-family: inherit;
+}
+
 
 
 .system-status-card {

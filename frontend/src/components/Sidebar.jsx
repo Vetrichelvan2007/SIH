@@ -1,4 +1,5 @@
-import { IconShield, IconPlus, IconMessage, IconTrash, IconCpu, IconCheck } from './Icons';
+import { useState } from 'react';
+import { IconShield, IconPlus, IconMessage, IconTrash, IconCpu, IconCheck, IconPencil, IconX } from './Icons';
 import LoadedModels from './LoadedModels';
 import SystemResources from './SystemResources';
 
@@ -8,6 +9,7 @@ const Sidebar = ({
   onSelectSession, 
   onNewChat, 
   onDeleteSession,
+  onRenameSession,
   models = [],
   selectedTask,
   onSelectTask,
@@ -20,6 +22,35 @@ const Sidebar = ({
   multiModelMode = false,
   onToggleMultiModel
 }) => {
+  const [editingId, setEditingId] = useState(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+
+  const handleStartRename = (e, session) => {
+    e.stopPropagation();
+    setEditingId(session.id);
+    setEditTitle(session.title || 'New Conversation');
+    setConfirmingDeleteId(null);
+  };
+
+  const handleSaveRename = (e, sessionId) => {
+    if (e) e.stopPropagation();
+    if (editTitle.strip ? editTitle.trim() : editTitle) {
+      if (onRenameSession) {
+        onRenameSession(sessionId, editTitle.trim());
+      }
+    }
+    setEditingId(null);
+  };
+
+  const handleConfirmDelete = (e, sessionId) => {
+    e.stopPropagation();
+    if (onDeleteSession) {
+      onDeleteSession(sessionId);
+    }
+    setConfirmingDeleteId(null);
+  };
+
   // Parse live metrics safely
   const gpu = systemStatus?.gpu;
   const cpu = systemStatus?.cpu;
@@ -104,33 +135,107 @@ const Sidebar = ({
             <div className="chat-history-list">
               {sessions.map((session) => {
                 const isActive = session.id === activeSessionId;
+                const isEditing = editingId === session.id;
+                const isConfirming = confirmingDeleteId === session.id;
+
                 return (
                   <div
                     key={session.id}
-                    className={`history-item ${isActive ? 'active' : ''}`}
+                    className={`history-item ${isActive ? 'active' : ''} ${isEditing ? 'editing' : ''} ${isConfirming ? 'confirming' : ''}`}
                     onClick={() => {
-                      onSelectSession(session.id);
-                      if (onCloseMobile) onCloseMobile();
+                      if (!isEditing && !isConfirming) {
+                        onSelectSession(session.id);
+                        if (onCloseMobile) onCloseMobile();
+                      }
                     }}
                   >
                     <div className="history-title-wrap">
-                      <IconMessage size={14} style={{ color: isActive ? 'var(--accent-cyan)' : 'var(--text-muted)' }} />
-                      <span className="history-title" title={session.title}>
-                        {session.title || 'New Conversation'}
-                      </span>
+                      <IconMessage size={14} style={{ color: isActive ? 'var(--accent-cyan)' : 'var(--text-muted)', flexShrink: 0 }} />
+                      
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          className="history-edit-input"
+                          value={editTitle}
+                          autoFocus
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveRename(e, session.id);
+                            if (e.key === 'Escape') setEditingId(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="history-title" title={session.title}>
+                          {session.title || 'New Conversation'}
+                        </span>
+                      )}
                     </div>
-                    
-                    <button
-                      type="button"
-                      className="delete-session-btn"
-                      title="Delete chat session"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteSession(session.id);
-                      }}
-                    >
-                      <IconTrash size={13} />
-                    </button>
+
+                    <div className="history-item-actions" onClick={(e) => e.stopPropagation()}>
+                      {isEditing ? (
+                        <>
+                          <button
+                            type="button"
+                            className="history-action-btn"
+                            title="Save title"
+                            onClick={(e) => handleSaveRename(e, session.id)}
+                          >
+                            <IconCheck size={13} style={{ color: 'var(--accent-emerald)' }} />
+                          </button>
+                          <button
+                            type="button"
+                            className="history-action-btn"
+                            title="Cancel edit"
+                            onClick={(e) => { e.stopPropagation(); setEditingId(null); }}
+                          >
+                            <IconX size={13} />
+                          </button>
+                        </>
+                      ) : isConfirming ? (
+                        <>
+                          <button
+                            type="button"
+                            className="history-action-btn confirm-delete"
+                            title="Confirm delete"
+                            onClick={(e) => handleConfirmDelete(e, session.id)}
+                          >
+                            Delete
+                          </button>
+                          <button
+                            type="button"
+                            className="history-action-btn cancel-delete"
+                            title="Cancel delete"
+                            onClick={(e) => { e.stopPropagation(); setConfirmingDeleteId(null); }}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="history-action-btn"
+                            title="Rename chat"
+                            onClick={(e) => handleStartRename(e, session)}
+                          >
+                            <IconPencil size={13} />
+                          </button>
+                          <button
+                            type="button"
+                            className="history-action-btn delete"
+                            title="Delete chat"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmingDeleteId(session.id);
+                              setEditingId(null);
+                            }}
+                          >
+                            <IconTrash size={13} />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 );
               })}

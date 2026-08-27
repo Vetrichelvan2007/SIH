@@ -199,7 +199,7 @@ const ChatMessage = ({ message }) => {
         {!isUser && message.metrics?.total_response_time && (
           <div className="message-response-time-badge">
             <span className="time-badge-icon">⚡</span>
-            <span>Generated locally · </span>
+            <span>Generated locally {message.route ? `(${message.route}) ` : ''}• </span>
             <span className="time-badge-highlight">Completed in {message.metrics.total_response_time}s</span>
           </div>
         )}
