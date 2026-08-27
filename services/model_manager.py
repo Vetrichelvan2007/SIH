@@ -68,7 +68,14 @@ def switch_model_stream(target_model_id: str):
             else:
                 yield sse_format("model_switch", "unloaded", f"Unload request sent for {old_display}.", model=old_display)
 
-    # 4. Begin loading new model
+    # 4. Check RAM & VRAM Resource Safety before loading new model
+    from .router_service import check_resource_safety
+    is_safe, safety_msg, metrics = check_resource_safety(target_ollama_name)
+
+    if not is_safe:
+        yield sse_format("model_switch", "warning", f"⚠️ Resource Reserve Warning: {safety_msg}. Loading anyway with CPU/VRAM offload.", model=target_display)
+
+    # Begin loading new model
     yield sse_format("model_switch", "loading", f"Loading {target_display} into local GPU VRAM...", model=target_display)
     
     load_model(target_ollama_name)

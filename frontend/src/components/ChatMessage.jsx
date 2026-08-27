@@ -142,14 +142,17 @@ function renderInlineFormatting(text) {
   return parts.length > 0 ? parts : text;
 }
 
-// Format model display name to prevent "undefined"
+// Format model display name to prevent "undefined" or stale fallbacks
 const formatModelDisplayName = (modelStr) => {
-  if (!modelStr || modelStr === 'undefined') return 'Qwen2.5-Coder';
+  if (!modelStr || modelStr === 'undefined') return 'Phi-4 Mini';
   if (typeof modelStr === 'object') {
-    return modelStr.name || modelStr.id || 'Qwen2.5-Coder';
+    return modelStr.name || modelStr.id || 'Phi-4 Mini';
   }
-  if (modelStr.toLowerCase().includes('phi')) return 'Phi-4 Mini';
-  if (modelStr.toLowerCase().includes('qwen')) return 'Qwen2.5-Coder';
+  const lower = String(modelStr).toLowerCase();
+  if (lower.includes('phi')) return 'Phi-4 Mini';
+  if (lower.includes('coder')) return 'Qwen2.5-Coder';
+  if (lower.includes('qwen') && lower.includes('1.5')) return 'Qwen2.5 1.5B';
+  if (lower.includes('qwen')) return 'Qwen2.5-Coder';
   return modelStr;
 };
 

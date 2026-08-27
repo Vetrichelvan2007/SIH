@@ -12,15 +12,38 @@ function App() {
   const [modelStatus, setModelStatus] = useState('ready'); // 'ready' | 'loading' | 'generating'
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
-  // Live Real-Time System Telemetry State
-  const [systemStatus, setSystemStatus] = useState(null);
+  // Multi-Model Mode State (Default: OFF)
+  const [multiModelMode, setMultiModelMode] = useState(false);
 
-  // Model Switching Transition State
+  // Real-time System Telemetry & Model Switching States
+  const [systemStatus, setSystemStatus] = useState(null);
+  const [modelsStatus, setModelsStatus] = useState(null);
   const [isSwitchingModel, setIsSwitchingModel] = useState(false);
   const [modelSwitchLogs, setModelSwitchLogs] = useState([]);
   const [targetSwitchModelName, setTargetSwitchModelName] = useState('');
 
-  // 1. Fetch live model availability from backend on mount
+  // Dedicated Request Execution State (Cleared at beginning of EVERY request)
+  const [currentExecution, setCurrentExecution] = useState({
+    requestId: null,
+    route: null,
+    selectedModel: null,
+    status: null
+  });
+
+  // Helper to fetch live detailed model status from /api/models/status
+  const fetchModelsStatus = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/models/status");
+      if (res.ok) {
+        const data = await res.json();
+        setModelsStatus(data);
+      }
+    } catch (err) {
+      console.warn("Could not fetch models status from backend:", err);
+    }
+  };
+
+  // 1. Fetch live model availability and Multi-Model status from backend on mount
   useEffect(() => {
     const fetchAvailableModels = async () => {
       try {
@@ -36,8 +59,39 @@ function App() {
       }
     };
 
+    const fetchMultiModelStatus = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/multi-model/status");
+        if (res.ok) {
+          const data = await res.json();
+          setMultiModelMode(Boolean(data.multi_model_mode));
+        }
+      } catch (err) {
+        console.warn("Could not fetch Multi-Model Mode status:", err);
+      }
+    };
+
     fetchAvailableModels();
+    fetchMultiModelStatus();
+    fetchModelsStatus();
   }, []);
+
+  // Handler to toggle Multi-Model Mode ON/OFF
+  const handleToggleMultiModel = async (enabled) => {
+    const targetState = Boolean(enabled);
+    setMultiModelMode(targetState);
+    try {
+      await fetch("http://localhost:8000/api/multi-model/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: targetState })
+      });
+      // Immediately refresh model status on toggle
+      fetchModelsStatus();
+    } catch (err) {
+        console.error("Failed to toggle Multi-Model Mode on backend:", err);
+    }
+  };
 
   // 2. Poll live real-time system status every 2 seconds with clean useEffect interval cleanup
   useEffect(() => {
@@ -52,6 +106,7 @@ function App() {
         console.warn("System telemetry poll offline:", err);
         setSystemStatus((prev) => (prev ? { ...prev, ollama: { status: 'offline', loaded_models: [] } } : null));
       }
+      fetchModelsStatus();
     };
 
     fetchStatus();
@@ -178,6 +233,15 @@ function App() {
     const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const userMsgId = `user-${Date.now()}`;
     const aiMsgId = `ai-${Date.now()}`;
+    const reqId = `req-${Date.now()}`;
+
+    // Reset request-specific execution state at start of EVERY request
+    setCurrentExecution({
+      requestId: reqId,
+      route: null,
+      selectedModel: multiModelMode ? null : (selectedModel?.name || 'Phi-4 Mini'),
+      status: 'query_received'
+    });
 
     const userMessage = {
       id: userMsgId,
@@ -187,22 +251,22 @@ function App() {
     };
 
     const taskLabel = selectedTask === 'coding' ? 'Coding' : 'Question / General';
-    const modelDisplayName = selectedModel?.name || selectedModel?.model || (selectedTask === 'coding' ? 'Qwen2.5-Coder' : 'Phi-4 Mini');
-    const modelId = selectedModel?.id || (selectedTask === 'coding' ? 'qwen2.5-coder' : 'phi4-mini');
+    const initialModelDisplayName = multiModelMode ? 'Selecting Model...' : (selectedModel?.name || (selectedTask === 'coding' ? 'Qwen2.5-Coder' : 'Phi-4 Mini'));
+    const initialModelId = selectedModel?.id || (selectedTask === 'coding' ? 'qwen2.5-coder' : 'phi4-mini');
 
     // Create initial streaming AI message with live pipeline state
     const initialAiMessage = {
       id: aiMsgId,
       sender: 'ai',
-      model: modelId,
-      modelName: modelDisplayName,
+      model: initialModelId,
+      modelName: initialModelDisplayName,
       task: taskLabel,
       text: '',
       pipeline: {
         stage: 'query_received',
         completedStages: ['query_received'],
         taskLabel: taskLabel,
-        modelName: modelDisplayName,
+        modelName: initialModelDisplayName,
         isComplete: false,
         metrics: null,
         error: null
@@ -245,7 +309,8 @@ function App() {
         },
         body: JSON.stringify({
           message: userText,
-          task: selectedTask
+          task: selectedTask,
+          multi_model_mode: multiModelMode
         })
       });
 
@@ -276,8 +341,24 @@ function App() {
           try {
             const event = JSON.parse(jsonString);
 
+            // Debug Logging
+            console.log("[CHAT EVENT]", event);
+
             // Handle SSE Event Types
             if (event.type === 'status') {
+              if (event.route) {
+                setCurrentExecution((prev) => ({ ...prev, route: event.route }));
+              }
+              if (event.model_name || event.model) {
+                const newModelName = event.model_name || event.model;
+                setCurrentExecution((prev) => {
+                  const updated = { ...prev, selectedModel: newModelName, status: event.stage };
+                  console.log("[EXECUTION STATE]", updated);
+                  console.log("[SYSTEM ACTIVE MODEL]", systemStatus?.active_model);
+                  return updated;
+                });
+              }
+
               setSessions((prev) =>
                 prev.map((s) => {
                   if (s.id === activeSessionId) {
@@ -288,14 +369,18 @@ function App() {
                           const updatedCompleted = Array.from(
                             new Set([...m.pipeline.completedStages, event.stage])
                           );
+                          const updatedModelName = event.model_name || m.modelName;
+                          const updatedModelId = event.model || m.model;
                           return {
                             ...m,
+                            model: updatedModelId,
+                            modelName: updatedModelName,
                             pipeline: {
                               ...m.pipeline,
                               stage: event.stage,
                               completedStages: updatedCompleted,
                               taskLabel: event.task_label || m.pipeline.taskLabel,
-                              modelName: event.model_name || m.pipeline.modelName
+                              modelName: updatedModelName
                             }
                           };
                         }
@@ -330,6 +415,12 @@ function App() {
               const endTime = performance.now();
               const calcTime = parseFloat(((endTime - startTime) / 1000).toFixed(2));
               const finalMetrics = event.metrics || { total_response_time: calcTime };
+              const finalModelName = event.model_name || event.model;
+              const finalModelId = event.model || event.model_name;
+
+              if (finalModelName) {
+                setCurrentExecution((prev) => ({ ...prev, selectedModel: finalModelName, status: 'completed' }));
+              }
 
               setSessions((prev) =>
                 prev.map((s) => {
@@ -338,12 +429,17 @@ function App() {
                       ...s,
                       messages: s.messages.map((m) => {
                         if (m.id === aiMsgId) {
+                          const newModelName = finalModelName || m.modelName;
+                          const newModelId = finalModelId || m.model;
                           return {
                             ...m,
+                            model: newModelId,
+                            modelName: newModelName,
                             metrics: finalMetrics,
                             pipeline: {
                               ...m.pipeline,
                               stage: 'completed',
+                              modelName: newModelName,
                               isComplete: true,
                               metrics: finalMetrics
                             }
@@ -441,8 +537,13 @@ function App() {
         selectedTask={selectedTask}
         onSelectTask={handleSelectTask}
         systemStatus={systemStatus}
+        modelsStatus={modelsStatus}
+        isSwitchingModel={isSwitchingModel}
+        targetSwitchModelName={targetSwitchModelName}
         isMobileOpen={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        multiModelMode={multiModelMode}
+        onToggleMultiModel={handleToggleMultiModel}
       />
 
       {/* Main Workspace */}
@@ -459,6 +560,9 @@ function App() {
         isSwitchingModel={isSwitchingModel}
         modelSwitchLogs={modelSwitchLogs}
         targetSwitchModelName={targetSwitchModelName}
+        multiModelMode={multiModelMode}
+        onToggleMultiModel={handleToggleMultiModel}
+        currentExecution={currentExecution}
       />
     </div>
   );

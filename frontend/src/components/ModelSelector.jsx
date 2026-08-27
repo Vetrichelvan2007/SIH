@@ -1,7 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { IconChevronDown, IconCheck, IconCode, IconMessage } from './Icons';
 
-const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel, disabled = false }) => {
+const ModelSelector = ({ 
+  selectedTask, 
+  onSelectTask, 
+  models = [], 
+  selectedModel, 
+  disabled = false,
+  multiModelMode = false,
+  onToggleMultiModel
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -18,6 +26,22 @@ const ModelSelector = ({ selectedTask, onSelectTask, models = [], selectedModel,
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      {/* Multi-Model Mode Toggle Switch */}
+      <div 
+        className={`multi-model-toggle-container ${multiModelMode ? 'active' : ''}`}
+        title={multiModelMode ? "Multi-Model Mode ON: Routing active via Qwen2.5 1.5B Router" : "Multi-Model Mode OFF: Single-model mode active (0 overhead)"}
+        onClick={() => !disabled && onToggleMultiModel && onToggleMultiModel(!multiModelMode)}
+      >
+        <span className="multi-model-label">Multi-Model Mode</span>
+        <div className={`toggle-switch-track ${multiModelMode ? 'on' : 'off'}`}>
+          <div className="toggle-switch-thumb" />
+        </div>
+        {multiModelMode ? (
+          <span className="multi-model-badge active">Qwen2.5 1.5B Router</span>
+        ) : (
+          <span className="multi-model-badge inactive">OFF</span>
+        )}
+      </div>
       {/* Quick Task Switcher Buttons */}
       <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-subtle)', opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
         <button

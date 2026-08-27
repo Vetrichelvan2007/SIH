@@ -4,6 +4,9 @@ import { IconCheck, IconChevronDown } from './Icons';
 const STAGE_ORDER = [
   'query_received',
   'backend_processing',
+  'multi_model_routing',
+  'resource_safety_check',
+  'route_classified',
   'task_selected',
   'model_selected',
   'ollama_connecting',
@@ -23,6 +26,19 @@ const DEFAULT_STEPS = [
   { id: 'completed', label: 'Response complete' }
 ];
 
+const MULTI_MODEL_STEPS = [
+  { id: 'query_received', label: 'Query received' },
+  { id: 'backend_processing', label: 'Request sent to backend' },
+  { id: 'multi_model_routing', label: 'Invoking Qwen2.5 1.5B Router' },
+  { id: 'resource_safety_check', label: 'RAM & VRAM Safety Check (RAM >= 1GB, VRAM >= 500MB)' },
+  { id: 'route_classified', label: 'Route Classified' },
+  { id: 'model_selected', label: 'Route Model Selected' },
+  { id: 'ollama_connecting', label: 'Connecting to local Ollama' },
+  { id: 'ollama_processing', label: 'Model processing locally' },
+  { id: 'receiving_response', label: 'Receiving model response' },
+  { id: 'completed', label: 'Response complete' }
+];
+
 const ExecutionPipeline = ({ 
   currentStage, 
   completedStages = [], 
@@ -33,6 +49,9 @@ const ExecutionPipeline = ({
   error = null 
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  const isMultiModelRun = completedStages.includes('multi_model_routing') || currentStage === 'multi_model_routing' || currentStage === 'route_classified' || completedStages.includes('route_classified');
+  const activeSteps = isMultiModelRun ? MULTI_MODEL_STEPS : DEFAULT_STEPS;
 
   // Helper to determine step status ('completed', 'active', 'pending', 'error')
   const getStepStatus = (stepId, index) => {
@@ -111,7 +130,7 @@ const ExecutionPipeline = ({
       </div>
 
       <div className="pipeline-steps-list">
-        {DEFAULT_STEPS.map((step, index) => {
+        {activeSteps.map((step, index) => {
           const status = getStepStatus(step.id, index);
           const label = getDynamicLabel(step.id, step.label);
 

@@ -19,7 +19,10 @@ const ChatWindow = ({
   onToggleSidebar,
   isSwitchingModel = false,
   modelSwitchLogs = [],
-  targetSwitchModelName = ''
+  targetSwitchModelName = '',
+  multiModelMode = false,
+  onToggleMultiModel,
+  currentExecution = null
 }) => {
   const messagesEndRef = useRef(null);
 
@@ -32,6 +35,8 @@ const ChatWindow = ({
 
   const messages = activeSession?.messages || [];
   const isGenerating = modelStatus === 'generating' || modelStatus === 'loading' || isSwitchingModel;
+
+  const currentDisplayModel = currentExecution?.selectedModel || (multiModelMode ? 'Selecting Model...' : (selectedModel?.name || 'Phi-4 Mini'));
 
   return (
     <main className="chat-workspace">
@@ -59,6 +64,8 @@ const ChatWindow = ({
             models={models}
             selectedModel={selectedModel}
             disabled={isSwitchingModel || isGenerating}
+            multiModelMode={multiModelMode}
+            onToggleMultiModel={onToggleMultiModel}
           />
 
           <ModelStatus status={isSwitchingModel ? 'loading' : modelStatus} />
@@ -68,7 +75,7 @@ const ChatWindow = ({
       {/* Model Transition Modal when switching local models */}
       {isSwitchingModel && (
         <ModelTransitionPanel 
-          targetModelName={targetSwitchModelName || selectedModel?.name || 'Qwen2.5-Coder'}
+          targetModelName={targetSwitchModelName || selectedModel?.name || 'Phi-4 Mini'}
           logs={modelSwitchLogs}
           isComplete={modelSwitchLogs.some((l) => l.status === 'ready')}
         />
@@ -94,10 +101,12 @@ const ChatWindow = ({
               <div className="message-content-wrapper">
                 <div className="message-meta">
                   <span>Sovereign Agent</span>
-                  <span className="meta-model-tag">{selectedModel?.name || selectedModel?.model || 'Qwen2.5-Coder'}</span>
+                  <span className="meta-model-tag">{currentDisplayModel}</span>
                 </div>
                 <div className="message-bubble" style={{ color: 'var(--accent-cyan)', fontStyle: 'italic' }}>
-                  Processing locally via {selectedModel?.name || selectedModel?.model || 'local Ollama model'}...
+                  {currentExecution?.selectedModel
+                    ? `${currentExecution.selectedModel} is processing locally...`
+                    : (multiModelMode ? 'Selecting model and processing locally...' : `Processing locally via ${selectedModel?.name || 'Phi-4 Mini'}...`)}
                 </div>
               </div>
             </div>

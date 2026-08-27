@@ -10,8 +10,20 @@ from pydantic import BaseModel, Field
 
 from models.qwen_coder import stream_code_response
 from models.phi_answer import stream_answer_response
-from services.system_monitor import get_system_status
+from services.system_monitor import get_system_status, get_detailed_models_status
 from services.model_manager import switch_model_stream
+from services.router_service import (
+    get_multi_model_mode,
+    set_multi_model_mode,
+    update_safety_reserves,
+    check_resource_safety,
+    classify_query,
+    ensure_router_loaded,
+    ensure_specialist_loaded,
+    ROUTE_MODEL_MAP,
+    ROUTE_PRIORITY,
+    VALID_ROUTES
+)
 
 # File path for local conversation storage
 CONVERSATION_FILE = Path(__file__).parent / "conversation.json"
@@ -122,12 +134,15 @@ app = FastAPI(
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://localhost:3000",
+    "*"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -138,9 +153,17 @@ class ChatRequest(BaseModel):
     message: Optional[str] = Field(None, description="The input prompt or message from user")
     query: Optional[str] = Field(None, description="Backward compatible alias for user prompt")
     task: str = Field("coding", description="Target task: 'coding' or 'question'/'general'")
+    multi_model_mode: Optional[bool] = Field(None, description="Optional override for Multi-Model Mode")
 
 class ModelSwitchRequest(BaseModel):
     model: str = Field(..., description="Target model ID to switch and verify (e.g., 'qwen2.5-coder' or 'phi4-mini')")
+
+class MultiModelToggleRequest(BaseModel):
+    enabled: bool = Field(..., description="Enable (True) or Disable (False) Multi-Model Mode")
+
+class MultiModelConfigRequest(BaseModel):
+    ram_safety_reserve_mb: Optional[float] = Field(None, description="RAM safety reserve threshold in MB (default 1024 MB = 1 GB)")
+    vram_safety_reserve_mb: Optional[float] = Field(None, description="VRAM safety reserve threshold in MB (default 500 MB)")
 
 def sse_format(event_data: dict) -> str:
     return f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
@@ -162,6 +185,51 @@ def system_status_endpoint():
     CPU usage %, system RAM, and running Ollama models.
     """
     return get_system_status()
+
+@app.get("/api/models/status")
+def models_status_endpoint():
+    """
+    Returns live dynamically detected loaded models in RAM/VRAM, model roles,
+    statuses (ACTIVE/LOADED/LOADING/UNLOADING/FAILED), and system RAM & VRAM reserves.
+    """
+    return get_detailed_models_status()
+
+@app.get("/api/multi-model/status")
+def multi_model_status_endpoint():
+    """
+    Returns current status of Multi-Model Mode, router model info, safety reserves, and route mappings.
+    """
+    return {
+        "multi_model_mode": get_multi_model_mode(),
+        "router_model": "qwen2.5:1.5b",
+        "routes": VALID_ROUTES,
+        "priority": ["DOCUMENT", "RAG", "CODING", "REASONING", "GENERAL"],
+        "route_mapping": ROUTE_MODEL_MAP
+    }
+
+@app.post("/api/multi-model/toggle")
+def toggle_multi_model_endpoint(request: MultiModelToggleRequest):
+    """
+    Toggles Multi-Model Mode ON or OFF.
+    When set to OFF: immediately unloads qwen2.5:1.5b router from VRAM and releases RAM/VRAM resources.
+    """
+    result = set_multi_model_mode(request.enabled)
+    return {
+        "status": "success",
+        "message": f"Multi-Model Mode is now {'ON' if request.enabled else 'OFF'}",
+        **result
+    }
+
+@app.post("/api/multi-model/config")
+def config_multi_model_endpoint(request: MultiModelConfigRequest):
+    """
+    Updates RAM and VRAM safety reserves.
+    """
+    result = update_safety_reserves(request.ram_safety_reserve_mb, request.vram_safety_reserve_mb)
+    return {
+        "status": "updated",
+        **result
+    }
 
 @app.post("/api/models/switch")
 def switch_model_endpoint(request: ModelSwitchRequest):
@@ -193,10 +261,8 @@ def new_chat_endpoint():
 def chat_endpoint(request: ChatRequest):
     """
     Streaming chat endpoint emitting real Server-Sent Events (SSE):
-    - Status events: query_received, backend_processing, task_selected, model_selected, ollama_connecting, ollama_processing, receiving_response, completed
-    - Token events: streamed token contents
-    - Metrics event: total response time, backend time, model processing time
-    - Error events: connection/model error details
+    - Single-Model Mode (OFF - DEFAULT): 0 routing overhead, direct execution.
+    - Multi-Model Mode (ON - OPTIONAL): Qwen2.5 1.5B intent router, RAM/VRAM safety checks, lazy loading, priority hierarchy.
     """
     user_text = request.message or request.query
     if not user_text or not user_text.strip():
@@ -205,52 +271,158 @@ def chat_endpoint(request: ChatRequest):
             detail="Request message cannot be empty."
         )
 
-    task_clean = request.task.lower().strip()
+    use_multi_model = request.multi_model_mode if request.multi_model_mode is not None else get_multi_model_mode()
+    req_task = (request.task or "coding").lower().strip()
 
     def generate_events():
+        # Initialize task_clean at the top of generate_events scope to guarantee it exists in all paths
+        task_clean = "coding" if req_task in ["coding", "code"] else "general"
         start_time = time.perf_counter()
 
-        # 1. Query received
-        yield sse_format({"type": "status", "stage": "query_received", "message": "Query received"})
-
-        # 2. Sent to backend / processing
-        backend_start = time.perf_counter()
-        yield sse_format({"type": "status", "stage": "backend_processing", "message": "Request sent to FastAPI backend"})
-
-        is_coding = task_clean in ["coding", "code"]
-        task_label = "Coding" if is_coding else "Question / General"
-        model_id = "qwen2.5-coder" if is_coding else "phi4-mini"
-        model_name = "Qwen2.5-Coder" if is_coding else "Phi-4 Mini"
-
-        # 3. Task identified
-        yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label})
-
-        # 4. Model selected
-        yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name})
-
-        # Load conversation history
-        history = load_conversation()
-        user_msg = {"role": "user", "content": user_text}
-        history.append(user_msg)
-        backend_overhead_time = round(time.perf_counter() - backend_start, 3)
-
-        # 5. Connected to local Ollama
-        yield sse_format({"type": "status", "stage": "ollama_connecting", "message": "Connecting to local Ollama API"})
-
-        # 6. Model processing locally
-        yield sse_format({"type": "status", "stage": "ollama_processing", "message": f"{model_name} is processing locally..."})
-
-        model_start = time.perf_counter()
-        accumulated_tokens = []
-
         try:
+            # 1. Query received
+            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received"})
+
+            # 2. Sent to backend / processing
+            backend_start = time.perf_counter()
+            yield sse_format({"type": "status", "stage": "backend_processing", "message": "Request sent to FastAPI backend"})
+
+            if not use_multi_model:
+                # ==================================================
+                # 1. SINGLE-MODEL MODE (OFF - DEFAULT)
+                # ZERO ROUTING OVERHEAD, DIRECT MODEL PIPELINE
+                # ==================================================
+                is_coding = task_clean == "coding"
+                task_label = "Coding" if is_coding else "Question / General"
+                model_id = "qwen2.5-coder" if is_coding else "phi4-mini"
+                model_name = "Qwen2.5-Coder" if is_coding else "Phi-4 Mini"
+
+                yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "multi_model": False})
+                yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name})
+            else:
+                # ==================================================
+                # 2. MULTI-MODEL MODE (ON - OPTIONAL)
+                # ROUTER: Qwen2.5 1.5B with Memory Management & Safety Verification
+                # ==================================================
+                yield sse_format({"type": "status", "stage": "multi_model_routing", "message": "Multi-Model Mode Active: Preparing Qwen2.5 1.5B Router...", "multi_model": True})
+
+                # Step 1 & 2: Ensure Router is loaded (unloads current inference model if memory is insufficient)
+                router_loaded, router_msg = ensure_router_loaded()
+                
+                router_safe, _, router_metrics = check_resource_safety("qwen2.5:1.5b")
+                yield sse_format({
+                    "type": "status",
+                    "stage": "resource_safety_check",
+                    "target": "Router (qwen2.5:1.5b)",
+                    "is_safe": router_safe,
+                    "message": router_msg,
+                    "metrics": router_metrics
+                })
+
+                # Step 3: Classify query via Router (Qwen2.5 1.5B with fallback)
+                try:
+                    raw_route, router_info = classify_query(user_text)
+                    selected_route = str(raw_route or "GENERAL").strip().upper()
+                    if selected_route not in VALID_ROUTES:
+                        selected_route = "GENERAL"
+                except Exception as r_err:
+                    print(f"Router error: {r_err}")
+                    selected_route = "GENERAL"
+                    router_info = {"method": "router_error_fallback", "message": str(r_err), "route": "GENERAL"}
+
+                # Explicit Route-to-Model Mapping
+                if selected_route == "CODING":
+                    target_model_id = "qwen2.5-coder"
+                    target_model_name = "Qwen2.5-Coder"
+                    task_clean = "coding"
+                elif selected_route == "GENERAL":
+                    target_model_id = "phi4-mini"
+                    target_model_name = "Phi-4 Mini"
+                    task_clean = "general"
+                elif selected_route == "REASONING":
+                    target_model_id = "phi4-mini"
+                    target_model_name = "Phi-4 Mini"
+                    task_clean = "reasoning"
+                elif selected_route == "RAG":
+                    target_model_id = "phi4-mini"
+                    target_model_name = "Phi-4 Mini"
+                    task_clean = "rag"
+                elif selected_route == "DOCUMENT":
+                    target_model_id = "phi4-mini"
+                    target_model_name = "Phi-4 Mini"
+                    task_clean = "document"
+                else:
+                    selected_route = "GENERAL"
+                    target_model_id = "phi4-mini"
+                    target_model_name = "Phi-4 Mini"
+                    task_clean = "general"
+
+                # Backend Debug Logging
+                raw_out_str = router_info.get("raw_output", selected_route)
+                print("\n" + "="*50)
+                print("[ROUTER]")
+                print(f"Query: {user_text}")
+                print(f"Raw output: {raw_out_str}")
+                print(f"Normalized route: {selected_route}")
+                print(f"Selected model: {target_model_name}")
+                print("="*50 + "\n")
+
+                yield sse_format({
+                    "type": "status",
+                    "stage": "route_classified",
+                    "route": selected_route,
+                    "priority": "DOCUMENT > RAG > CODING > REASONING > GENERAL",
+                    "message": f"Route classified: {selected_route}",
+                    "router_info": router_info
+                })
+
+                task_label = f"Multi-Model Route [{selected_route}]"
+
+                # Step 4 & 5: Ensure Specialist Model is loaded (unloads Router model if memory safety requires it)
+                spec_loaded, spec_msg = ensure_specialist_loaded(target_model_id)
+
+                if not spec_loaded:
+                    # Safe Fallback to default active model
+                    yield sse_format({
+                        "type": "status",
+                        "stage": "resource_fallback",
+                        "message": f"⚠️ Safety limit reached for {target_model_name}: {spec_msg}. Falling back safely to default active model."
+                    })
+                    model_id = "phi4-mini"
+                    model_name = "Phi-4 Mini"
+                else:
+                    model_id = target_model_id
+                    model_name = target_model_name
+
+                yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "route": selected_route, "multi_model": True})
+                yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name})
+
+            # Safe Route Checks
+            is_coding = task_clean == "coding"
+            is_reasoning = task_clean == "reasoning"
+            is_rag = task_clean == "rag"
+            is_document = task_clean == "document"
+            is_general = task_clean == "general"
+
+            # Load conversation history
+            history = load_conversation()
+            user_msg = {"role": "user", "content": user_text}
+            history.append(user_msg)
+            backend_overhead_time = round(time.perf_counter() - backend_start, 3)
+
+            # Connected to local Ollama API
+            yield sse_format({"type": "status", "stage": "ollama_connecting", "message": "Connecting to local Ollama API"})
+
+            # Model processing locally
+            yield sse_format({"type": "status", "stage": "ollama_processing", "message": f"{model_name} is processing locally..."})
+
+            model_start = time.perf_counter()
+            accumulated_tokens = []
+
             if is_coding:
                 stream = stream_code_response(history)
-            elif task_clean in ["question", "general", "answer", "qa"]:
-                stream = stream_answer_response(history)
             else:
-                yield sse_format({"type": "error", "stage": "error", "message": f"Invalid task '{request.task}'."})
-                return
+                stream = stream_answer_response(history)
 
             first_chunk = True
             for token in stream:
@@ -271,13 +443,14 @@ def chat_endpoint(request: ChatRequest):
             history.append(assistant_msg)
             save_conversation(history)
 
-            # 7. Completed event with timing metrics
+            # Completed event with timing metrics
             yield sse_format({"type": "status", "stage": "completed", "message": "Response completed"})
 
             yield sse_format({
                 "type": "complete",
                 "model": model_id,
                 "model_name": model_name,
+                "multi_model_mode": use_multi_model,
                 "metrics": {
                     "total_response_time": total_time,
                     "backend_time": backend_overhead_time,
@@ -286,9 +459,12 @@ def chat_endpoint(request: ChatRequest):
             })
 
         except HTTPException as http_exc:
+            print(f"HTTPException in generate_events: {http_exc.detail}")
             yield sse_format({"type": "error", "stage": "error", "message": http_exc.detail})
         except Exception as exc:
-            yield sse_format({"type": "error", "stage": "error", "message": f"Ollama connection error: {str(exc)}"})
+            import traceback
+            traceback.print_exc()
+            yield sse_format({"type": "error", "stage": "error", "message": f"Server processing error: {str(exc)}"})
 
     return StreamingResponse(
         generate_events(),

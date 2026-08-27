@@ -30,6 +30,28 @@ def unload_model(model_name: str) -> bool:
     except Exception:
         return False
 
+def unload_model_and_verify(model_name: str, max_timeout_sec: float = 6.0) -> bool:
+    """
+    Requests Ollama to unload a model and polls /api/ps until RAM/VRAM resources
+    are confirmed released or until max_timeout_sec is reached.
+    """
+    import time
+    if not model_name:
+        return True
+
+    unload_model(model_name)
+    model_name_clean = model_name.lower().strip()
+
+    start = time.time()
+    while (time.time() - start) < max_timeout_sec:
+        time.sleep(0.5)
+        loaded = get_loaded_models()
+        still_loaded = any(model_name_clean in m.get("name", "").lower() for m in loaded)
+        if not still_loaded:
+            return True
+
+    return False
+
 def load_model(model_name: str) -> bool:
     """
     Triggers Ollama to load a model into VRAM using keep_alive: "1h".

@@ -1,7 +1,7 @@
 import { IconCheck } from './Icons';
 
 const ModelTransitionPanel = ({ 
-  targetModelName = 'Qwen2.5-Coder',
+  targetModelName = 'Phi-4 Mini',
   logs = [],
   isComplete = false
 }) => {

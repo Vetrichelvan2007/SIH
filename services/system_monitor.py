@@ -114,3 +114,86 @@ def get_system_status() -> dict:
         "inference_mode": "LOCAL INFERENCE",
         "timestamp": psutil.time.time() if hasattr(psutil, "time") else 0
     }
+
+def get_detailed_models_status() -> dict:
+    """
+    Retrieves live loaded models breakdown from Ollama /api/ps and system RAM/VRAM resources.
+    Conforms to GET /api/models/status API specification.
+    """
+    from services.router_service import RAM_SAFETY_RESERVE_MB, VRAM_SAFETY_RESERVE_MB
+
+    # 1. Fetch raw loaded models from Ollama /api/ps
+    loaded_models_res = []
+    try:
+        res = requests.get(OLLAMA_PS_URL, timeout=3)
+        if res.status_code == 200:
+            data = res.json()
+            raw_models = data.get("models", [])
+            
+            for idx, m in enumerate(raw_models):
+                model_name = m.get("name", m.get("model", "unknown"))
+                size_bytes = m.get("size", 0)
+                size_vram_bytes = m.get("size_vram", 0)
+
+                ram_mb = max(0.0, round((size_bytes - size_vram_bytes) / (1024 * 1024), 1))
+                vram_mb = round(size_vram_bytes / (1024 * 1024), 1)
+
+                name_lower = model_name.lower()
+                if "1.5b" in name_lower or "router" in name_lower:
+                    role = "ROUTER"
+                    role_display = "Query Router"
+                elif "coder" in name_lower:
+                    role = "CODING"
+                    role_display = "Coding Model"
+                elif "phi" in name_lower:
+                    role = "GENERAL QA"
+                    role_display = "General QA"
+                else:
+                    role = "MAIN"
+                    role_display = "Main Model"
+
+                # First loaded model is marked ACTIVE, others LOADED
+                status_str = "ACTIVE" if idx == 0 else "LOADED"
+
+                loaded_models_res.append({
+                    "name": model_name,
+                    "role": role,
+                    "role_display": role_display,
+                    "status": status_str,
+                    "ram_usage_mb": ram_mb,
+                    "vram_usage_mb": vram_mb,
+                    "size_gb": round(size_bytes / (1024**3), 2)
+                })
+    except Exception:
+        pass
+
+    # 2. Fetch System Memory metrics
+    mem = psutil.virtual_memory()
+    ram_total_mb = round(mem.total / (1024 * 1024), 1)
+    ram_used_mb = round(mem.used / (1024 * 1024), 1)
+    ram_available_mb = round(mem.available / (1024 * 1024), 1)
+
+    gpu_info = get_gpu_info()
+    if gpu_info.get("available", False):
+        vram_total_mb = float(gpu_info.get("vram_total_mb", 0))
+        vram_used_mb = float(gpu_info.get("vram_used_mb", 0))
+        vram_available_mb = max(0.0, vram_total_mb - vram_used_mb)
+    else:
+        vram_total_mb = 0.0
+        vram_used_mb = 0.0
+        vram_available_mb = 0.0
+
+    return {
+        "models": loaded_models_res,
+        "system": {
+            "ram_total_mb": ram_total_mb,
+            "ram_used_mb": ram_used_mb,
+            "ram_available_mb": ram_available_mb,
+            "ram_reserve_mb": RAM_SAFETY_RESERVE_MB,
+            "vram_total_mb": vram_total_mb,
+            "vram_used_mb": vram_used_mb,
+            "vram_available_mb": vram_available_mb,
+            "vram_reserve_mb": VRAM_SAFETY_RESERVE_MB
+        }
+    }
+
