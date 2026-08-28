@@ -1,22 +1,11 @@
 import { useState } from 'react';
 import { IconCheck, IconChevronDown } from './Icons';
 
-const STAGE_ORDER = [
-  'query_received',
-  'backend_processing',
-  'multi_model_routing',
-  'resource_safety_check',
-  'route_classified',
-  'task_selected',
-  'model_selected',
-  'ollama_connecting',
-  'ollama_processing',
-  'receiving_response',
-  'completed'
-];
-
 const DEFAULT_STEPS = [
   { id: 'query_received', label: 'Query received' },
+  { id: 'extracting_document_content', label: 'Extracting document text & structures' },
+  { id: 'processing_visual_content', label: 'Qwen2.5-VL-3B visual page analysis' },
+  { id: 'preparing_context', label: 'Building context window' },
   { id: 'backend_processing', label: 'Request sent to backend' },
   { id: 'task_selected', label: 'Task identified' },
   { id: 'model_selected', label: 'Model selected' },
@@ -28,9 +17,12 @@ const DEFAULT_STEPS = [
 
 const MULTI_MODEL_STEPS = [
   { id: 'query_received', label: 'Query received' },
+  { id: 'extracting_document_content', label: 'Extracting document text & structures' },
+  { id: 'processing_visual_content', label: 'Qwen2.5-VL-3B visual page analysis' },
+  { id: 'preparing_context', label: 'Building context window' },
   { id: 'backend_processing', label: 'Request sent to backend' },
   { id: 'multi_model_routing', label: 'Invoking Qwen2.5 1.5B Router' },
-  { id: 'resource_safety_check', label: 'RAM & VRAM Safety Check (RAM >= 1GB, VRAM >= 500MB)' },
+  { id: 'resource_safety_check', label: 'RAM & VRAM Safety Check (RAM ≥ 1GB, VRAM ≥ 500MB)' },
   { id: 'route_classified', label: 'Route Classified' },
   { id: 'model_selected', label: 'Route Model Selected' },
   { id: 'ollama_connecting', label: 'Connecting to local Ollama' },
@@ -53,8 +45,7 @@ const ExecutionPipeline = ({
   const isMultiModelRun = completedStages.includes('multi_model_routing') || currentStage === 'multi_model_routing' || currentStage === 'route_classified' || completedStages.includes('route_classified');
   const activeSteps = isMultiModelRun ? MULTI_MODEL_STEPS : DEFAULT_STEPS;
 
-  // Helper to determine step status ('completed', 'active', 'pending', 'error')
-  const getStepStatus = (stepId, index) => {
+  const getStepStatus = (stepId) => {
     if (error && (currentStage === stepId || completedStages.includes(stepId))) {
       return 'error';
     }
@@ -63,10 +54,6 @@ const ExecutionPipeline = ({
     }
     if (currentStage === stepId) {
       return 'active';
-    }
-    const currentIdx = STAGE_ORDER.indexOf(currentStage);
-    if (currentIdx !== -1 && index < currentIdx) {
-      return 'completed';
     }
     return 'pending';
   };
@@ -88,6 +75,11 @@ const ExecutionPipeline = ({
     ? `${metrics.total_response_time}s` 
     : null;
 
+  // Filter steps to show relevant ones (avoid empty uncompleted optional steps when done)
+  const visibleSteps = isComplete
+    ? activeSteps.filter(s => completedStages.includes(s.id) || s.id === 'completed' || s.id === 'query_received' || s.id === 'backend_processing' || s.id === 'model_selected')
+    : activeSteps;
+
   // Render collapsed summary bar when execution is complete
   if (isComplete && !isExpanded) {
     return (
@@ -98,7 +90,7 @@ const ExecutionPipeline = ({
       >
         <div className="summary-badge-left">
           <span className="badge-icon-check"><IconCheck size={12} /></span>
-          <span className="summary-title">Generated locally</span>
+          <span className="summary-title">Execution Pipeline</span>
           <span className="summary-divider">•</span>
           <span className="summary-model">{modelName}</span>
         </div>
@@ -130,14 +122,14 @@ const ExecutionPipeline = ({
       </div>
 
       <div className="pipeline-steps-list">
-        {activeSteps.map((step, index) => {
-          const status = getStepStatus(step.id, index);
+        {visibleSteps.map((step) => {
+          const status = getStepStatus(step.id);
           const label = getDynamicLabel(step.id, step.label);
 
           return (
             <div key={step.id} className={`pipeline-step-item ${status}`}>
               <div className="step-indicator">
-                {status === 'completed' && <span className="icon-completed">✓</span>}
+                {status === 'completed' && <span className="icon-completed"><IconCheck size={11} /></span>}
                 {status === 'active' && <span className="icon-active-dot">◉</span>}
                 {status === 'pending' && <span className="icon-pending">○</span>}
                 {status === 'error' && <span className="icon-error">✕</span>}
@@ -159,7 +151,6 @@ const ExecutionPipeline = ({
         <div className="pipeline-metrics-bar">
           <span className="metric-item">Total Response Time: <strong>{metrics.total_response_time}s</strong></span>
           {metrics.backend_time && <span className="metric-sub">Backend: {metrics.backend_time}s</span>}
-          {metrics.model_time && <span className="metric-sub">Model Processing: {metrics.model_time}s</span>}
         </div>
       )}
     </div>

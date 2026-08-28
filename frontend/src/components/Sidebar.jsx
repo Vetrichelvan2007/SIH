@@ -1,7 +1,20 @@
 import { useState } from 'react';
-import { IconShield, IconPlus, IconMessage, IconTrash, IconCpu, IconCheck, IconPencil, IconX } from './Icons';
+import { IconShield, IconPlus, IconMessage, IconTrash, IconCpu, IconCheck, IconPencil, IconX, IconSearch } from './Icons';
 import LoadedModels from './LoadedModels';
 import SystemResources from './SystemResources';
+
+function formatSidebarTitle(session) {
+  if (!session || !session.title) return 'New Conversation';
+  const raw = session.title.trim();
+  if (raw.includes('--- ATTACHED FILE CONTEXT') || raw.includes('ATTACHED FILE CONTEXT')) {
+    const match = raw.match(/Attached file:\s*([^\n\r]+)/i);
+    if (match && match[1]) {
+      return `Doc: ${match[1].trim()}`;
+    }
+    return 'Document QA';
+  }
+  return raw;
+}
 
 const Sidebar = ({ 
   sessions, 
@@ -28,17 +41,18 @@ const Sidebar = ({
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
   const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const handleStartRename = (e, session) => {
     e.stopPropagation();
     setEditingId(session.id);
-    setEditTitle(session.title || 'New Conversation');
+    setEditTitle(formatSidebarTitle(session));
     setConfirmingDeleteId(null);
   };
 
   const handleSaveRename = (e, sessionId) => {
     if (e) e.stopPropagation();
-    if (editTitle.strip ? editTitle.trim() : editTitle) {
+    if (editTitle && editTitle.trim()) {
       if (onRenameSession) {
         onRenameSession(sessionId, editTitle.trim());
       }
@@ -54,32 +68,35 @@ const Sidebar = ({
     setConfirmingDeleteId(null);
   };
 
-  // Parse live metrics safely
   const gpu = systemStatus?.gpu;
   const cpu = systemStatus?.cpu;
   const ollama = systemStatus?.ollama;
 
-  const gpuName = gpu?.available ? gpu.name : 'Local GPU / CPU';
+  const rawGpuName = gpu?.available ? gpu.name : 'NVIDIA GeForce RTX 3050 6GB';
+  const cleanGpuName = rawGpuName.replace('Laptop GPU', '').replace('GeForce ', '').trim();
   const isOllamaConnected = ollama?.status === 'running';
+
 
   const activeModelDisplay = systemStatus?.active_model 
     ? (systemStatus.active_model.includes('qwen') ? 'Qwen2.5-Coder' : (systemStatus.active_model.includes('phi') ? 'Phi-4 Mini' : systemStatus.active_model))
     : 'None Loaded';
 
-  const isStartingRouter = isSwitchingModel && targetSwitchModelName.includes('Router');
+  const filteredSessions = sessions ? sessions.filter(s => 
+    !searchTerm || (s.title && s.title.toLowerCase().includes(searchTerm.toLowerCase()))
+  ) : [];
 
   return (
     <aside className={`sidebar ${isMobileOpen ? 'mobile-open' : ''}`}>
-      {/* 1. Fixed Header Area */}
+      {/* 1. Header Branding & New Chat */}
       <div className="sidebar-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div className="sidebar-brand-row">
           <div className="brand-icon">
-            <IconShield size={22} />
+            <IconShield size={20} />
           </div>
           <div className="brand-info">
             <span className="brand-title">Sovereign AI</span>
             <span className="brand-badge">
-              <span className="brand-badge-dot"></span> On-Premise
+              <span className="brand-badge-dot"></span> ON-PREMISE
             </span>
           </div>
         </div>
@@ -92,60 +109,40 @@ const Sidebar = ({
             if (onCloseMobile) onCloseMobile();
           }}
         >
-          <IconPlus size={18} />
+          <IconPlus size={16} />
           <span>New Chat</span>
         </button>
       </div>
 
-      {/* 2. ONE Scroll Container for ALL Sidebar Content */}
+      {/* 2. Scrollable Body */}
       <div className="sidebar-scroll-area">
-        {/* Multi-Model Mode Toggle Card */}
+        {/* Chat History Section */}
         <div className="sidebar-section">
-          <div 
-            onClick={() => !isStartingRouter && onToggleMultiModel && onToggleMultiModel(!multiModelMode)}
-            style={{
-              background: isStartingRouter ? 'rgba(245, 158, 11, 0.12)' : (multiModelMode ? 'rgba(6, 182, 212, 0.12)' : 'var(--bg-card)'),
-              border: isStartingRouter ? '1px solid #f59e0b' : (multiModelMode ? '1px solid var(--accent-cyan)' : '1px solid var(--border-subtle)'),
-              borderRadius: '8px',
-              padding: '8px 10px',
-              cursor: isStartingRouter ? 'wait' : 'pointer',
-              transition: 'all 0.2s ease'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '11px', fontWeight: 600, color: isStartingRouter ? '#f59e0b' : (multiModelMode ? 'var(--accent-cyan)' : 'var(--text-secondary)') }}>
-                MULTI-MODEL MODE
-              </span>
-              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: isStartingRouter ? '#f59e0b' : (multiModelMode ? 'var(--accent-cyan)' : 'rgba(255,255,255,0.1)'), color: isStartingRouter || multiModelMode ? '#000' : 'var(--text-muted)' }}>
-                {isStartingRouter ? 'STARTING...' : (multiModelMode ? 'ON' : 'OFF')}
-              </span>
-            </div>
-            <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-              {isStartingRouter
-                ? 'Preparing Multi-Model Router...'
-                : (multiModelMode ? 'Qwen2.5 1.5B Router active' : 'Single model mode (0 overhead)')}
-            </div>
-            {multiModelMode && !isStartingRouter && (
-              <div style={{ fontSize: '9.5px', color: 'var(--accent-emerald)', marginTop: '3px', fontWeight: 500 }}>
-                ✓ Safety: RAM ≥1GB, VRAM ≥500MB
-              </div>
-            )}
-            {toggleError && (
-              <div style={{ fontSize: '10px', color: '#fca5a5', marginTop: '6px', background: 'rgba(244, 63, 94, 0.15)', padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(244, 63, 94, 0.3)' }}>
-                ⚠️ {toggleError}
-              </div>
-            )}
+          <div className="sidebar-section-header">
+            <span className="sidebar-section-title">CHAT HISTORY</span>
           </div>
-        </div>
 
-        {/* Chat History List (Renders ONLY if chat sessions exist) */}
-        {sessions && sessions.length > 0 && (
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">
-              Chat History
+          {sessions && sessions.length > 3 && (
+            <div className="chat-search-box">
+              <IconSearch size={14} className="search-icon" />
+              <input 
+                type="text"
+                placeholder="Search chats..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="chat-search-input"
+              />
+              {searchTerm && (
+                <button type="button" onClick={() => setSearchTerm('')} className="clear-search-btn">
+                  <IconX size={12} />
+                </button>
+              )}
             </div>
+          )}
+
+          {filteredSessions && filteredSessions.length > 0 ? (
             <div className="chat-history-list">
-              {sessions.map((session) => {
+              {filteredSessions.map((session) => {
                 const isActive = session.id === activeSessionId;
                 const isEditing = editingId === session.id;
                 const isConfirming = confirmingDeleteId === session.id;
@@ -153,7 +150,7 @@ const Sidebar = ({
                 return (
                   <div
                     key={session.id}
-                    className={`history-item ${isActive ? 'active' : ''} ${isEditing ? 'editing' : ''} ${isConfirming ? 'confirming' : ''}`}
+                    className={`history-item ${isActive ? 'active' : ''} ${isEditing ? 'editing' : ''}`}
                     onClick={() => {
                       if (!isEditing && !isConfirming) {
                         onSelectSession(session.id);
@@ -162,7 +159,7 @@ const Sidebar = ({
                     }}
                   >
                     <div className="history-title-wrap">
-                      <IconMessage size={14} style={{ color: isActive ? 'var(--accent-cyan)' : 'var(--text-muted)', flexShrink: 0 }} />
+                      <IconMessage size={14} className="history-msg-icon" />
                       
                       {isEditing ? (
                         <input
@@ -179,7 +176,7 @@ const Sidebar = ({
                         />
                       ) : (
                         <span className="history-title" title={session.title}>
-                          {session.title || 'New Conversation'}
+                          {formatSidebarTitle(session)}
                         </span>
                       )}
                     </div>
@@ -193,7 +190,7 @@ const Sidebar = ({
                             title="Save title"
                             onClick={(e) => handleSaveRename(e, session.id)}
                           >
-                            <IconCheck size={13} style={{ color: 'var(--accent-emerald)' }} />
+                            <IconCheck size={13} style={{ color: 'var(--success)' }} />
                           </button>
                           <button
                             type="button"
@@ -252,8 +249,10 @@ const Sidebar = ({
                 );
               })}
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="empty-history-text">No previous conversations</div>
+          )}
+        </div>
 
         {/* Loaded Models Section */}
         <LoadedModels 
@@ -270,98 +269,45 @@ const Sidebar = ({
           system={modelsStatus?.system}
         />
 
-        {/* Available Models Section */}
+        {/* Local Compute Node Section */}
         <div className="sidebar-section">
-          <div className="sidebar-section-title">
-            Available Models
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {models.map((m) => {
-              const isSelected = selectedTask === m.task;
-              return (
-                <div
-                  key={m.id}
-                  onClick={() => onSelectTask(m.task)}
-                  style={{
-                    background: isSelected ? 'var(--bg-card-active)' : 'var(--bg-card)',
-                    border: isSelected ? '1px solid var(--border-accent)' : '1px solid var(--border-subtle)',
-                    borderRadius: '8px',
-                    padding: '7px 10px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10.5px', color: 'var(--text-muted)' }}>
-                    <span>{m.type}</span>
-                    <span 
-                      style={{ 
-                        color: m.available ? 'var(--accent-emerald)' : 'var(--accent-rose)', 
-                        fontWeight: 600, 
-                        fontSize: '9.5px' 
-                      }}
-                    >
-                      {m.status || (m.available ? 'Available' : 'Unavailable')}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {m.available && <IconCheck size={12} style={{ color: 'var(--accent-emerald)' }} />}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name || m.id}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Local Compute Node Section (Normal document flow directly following Available Models) */}
-        <div className="sidebar-section">
-          <div className="system-status-card">
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <IconCpu size={14} style={{ color: 'var(--accent-cyan)' }} />
-                <span>LOCAL COMPUTE NODE</span>
+          <div className="sidebar-section-title">LOCAL COMPUTE NODE</div>
+          <div className="compute-node-card">
+            <div className="compute-card-header">
+              <div className="compute-card-title">
+                <IconCpu size={14} className="compute-cpu-icon" />
+                <span>Local GPU Node</span>
               </div>
-              <span style={{ fontSize: '10px', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span className="brand-badge-dot"></span> LIVE
+              <span className="live-status-pill">
+                <span className="live-dot"></span> LIVE
               </span>
             </div>
 
-            {/* GPU Info */}
-            {gpu?.available && (
-              <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={gpuName}>
-                GPU: {gpuName}
+            <div className="compute-card-body">
+              <div className="compute-info-row">
+                <span className="compute-label">GPU:</span>
+                <span className="compute-val" title={rawGpuName}>{cleanGpuName}</span>
               </div>
-            )}
 
-            {gpu?.available && (
-              <div className="system-metric">
-                <span>GPU UTILIZATION</span>
-                <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{gpu?.utilization || 0}%</span>
+
+              <div className="compute-info-row">
+                <span className="compute-label">CPU Usage:</span>
+                <span className="compute-val mono">{cpu?.usage || 0}%</span>
               </div>
-            )}
 
-            <div className="system-metric">
-              <span>CPU USAGE</span>
-              <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{cpu?.usage || 0}%</span>
-            </div>
+              <div className="compute-info-row">
+                <span className="compute-label">Active Model:</span>
+                <span className="compute-val active-model-text">
+                  ● {activeModelDisplay}
+                </span>
+              </div>
 
-            <div className="system-metric" style={{ marginTop: '2px' }}>
-              <span>ACTIVE MODEL</span>
-              <span style={{ color: active_model_name_color(activeModelDisplay), fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                ● {activeModelDisplay}
-              </span>
-            </div>
-
-            <div className="system-metric">
-              <span>OLLAMA</span>
-              <span style={{ color: isOllamaConnected ? 'var(--accent-emerald)' : 'var(--accent-rose)', fontWeight: 600 }}>
-                ● {isOllamaConnected ? 'CONNECTED' : 'DISCONNECTED'}
-              </span>
-            </div>
-
-            <div className="system-metric" style={{ marginTop: '2px', fontSize: '9.5px', color: 'var(--text-muted)' }}>
-              <span>PERIMETER</span>
-              <span style={{ color: 'var(--accent-cyan)' }}>LOCAL INFERENCE</span>
+              <div className="compute-info-row">
+                <span className="compute-label">Ollama Service:</span>
+                <span className={`compute-val status-${isOllamaConnected ? 'online' : 'offline'}`}>
+                  {isOllamaConnected ? '● Connected' : '● Disconnected'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -369,10 +315,5 @@ const Sidebar = ({
     </aside>
   );
 };
-
-function active_model_name_color(name) {
-  if (name === 'None Loaded') return 'var(--text-muted)';
-  return 'var(--accent-cyan)';
-}
 
 export default Sidebar;

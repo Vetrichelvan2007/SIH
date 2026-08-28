@@ -369,26 +369,29 @@ def normalize_route(raw_output: str) -> str:
 def fallback_keyword_routing(user_text: str) -> str:
     """
     Strict priority keyword router used if router LLM fails or returns unparseable route.
+    Prioritizes USER INTENT over document subject matter.
     Priority: DOCUMENT > RAG > CODING > REASONING > GENERAL
     """
     text = user_text.lower().strip()
 
-    # 1. DOCUMENT
-    if any(k in text for k in ["pdf", "docx", "summarize document", "uploaded pdf", "file content", "read document"]):
-        return "DOCUMENT"
+    # 1. DOCUMENT INTENT - Check if user is asking about document content, names, topics, or summary
+    doc_keywords = [
+        "pdf", "docx", "file", "document", "summarize", "summary", "student name", "roll number",
+        "author", "mentioned in", "described in", "topic", "page", "what is this document", "functions mentioned"
+    ]
+    if any(k in text for k in doc_keywords):
+        # Unless user explicitly asks to write or debug code, treat as DOCUMENT
+        if not any(k in text for k in ["write code", "fix code", "debug", "write a python program", "write script"]):
+            return "DOCUMENT"
 
     # 2. RAG
     if any(k in text for k in ["according to our", "knowledge base", "rag database", "search database", "retrieve context"]):
         return "RAG"
 
-    # 3. CODING - specific coding keywords only; avoid generic words like "program", "system", "ram", "model"
-    coding_keywords = [
-        "fastapi", "react", "python", "javascript", "typescript", "html", "css", "sql",
-        "write code", "fix code", "coding", "syntax error", "refactor code", "endpoint",
-        "quicksort", "function ", "def ", "const ", "let ", "var ", "import ", "return ",
-        "class ", "algorithm"
-    ]
-    if any(k in text for k in coding_keywords) or re.search(r'\b(code|bug|fix|script|react|vue|node)\b', text):
+    # 3. CODING - Requires explicit coding request (write, create, fix, debug, explain code)
+    if any(k in text for k in ["write code", "fix code", "debug", "refactor code", "write python", "syntax error", "build api"]):
+        return "CODING"
+    if re.search(r'\b(write|create|generate|fix|debug)\s+(a\s+)?(python|js|script|code|program)\b', text):
         return "CODING"
 
     # 4. REASONING - math calculations, equations, or numbers with arithmetic operators (+, -, *, x, /, ×)
@@ -398,30 +401,44 @@ def fallback_keyword_routing(user_text: str) -> str:
     # 5. DEFAULT GENERAL
     return "GENERAL"
 
-def classify_query(user_text: str) -> Tuple[str, Dict[str, Any]]:
+def classify_query(user_text: str, orchestrator: Optional[Any] = None) -> Tuple[str, Dict[str, Any]]:
     """
     Calls Qwen2.5 1.5B Router to classify query into exactly one route:
     DOCUMENT, RAG, CODING, REASONING, or GENERAL.
     Returns (normalized_route, router_info).
     """
+    step_r = None
+    if orchestrator:
+        from agent.trace_events import summarize_text
+        step_r = orchestrator.start_step(
+            type="router",
+            component="router",
+            model=ROUTER_MODEL_ID,
+            action="route_classification",
+            input_summary=f"User Query: '{summarize_text(user_text, 70)}'",
+            passed_to="Target Model"
+        )
+
     prompt = f"""You are an intent routing classifier for an AI application.
 Your ONLY task is to classify the user query into EXACTLY ONE of these 5 categories:
 
 - GENERAL: Explanations, general knowledge, concepts, science, comparisons, overview questions, or everyday conversational queries.
 - CODING: Software development, writing or fixing code, programming languages (Python, JS, HTML, etc.), API endpoints, debugging, syntax, or algorithms.
 - REASONING: Mathematical calculations, math equations, logic puzzles, or formal step-by-step arithmetic.
-- DOCUMENT: Analyzing, reading, or summarizing uploaded documents, PDFs, or text files.
+- DOCUMENT: Reading, analyzing, extracting information, or asking about the content/topics of an uploaded document, PDF, or text file.
 - RAG: Retrieving information from local knowledge bases, internal databases, or specific local vector stores.
 
 CRITICAL INSTRUCTIONS:
-- Concept explanations, comparisons (e.g. CPU, RAM vs VRAM, photosynthesis, how things work) MUST be classified as GENERAL.
-- Programming/code writing MUST be classified as CODING.
+- Classify based strictly on USER INTENT, NOT document subject.
+- DOCUMENT: Questions asking about the content, text, student names, roll numbers, data, functions, or topics inside an uploaded document/PDF/file (EVEN IF the document contains Python, Pandas, or programming code!).
+- CODING: ONLY when the user explicitly requests WRITING, GENERATING, DEBUGGING, FIXING, or REFACTORING code (e.g., "Write a Python script", "Fix this bug"). Questions asking "What is the student name?" or "What are the NumPy functions in the file?" are DOCUMENT tasks, NOT CODING tasks.
 
 Return valid JSON ONLY:
 {{"route": "CATEGORY_NAME"}}
 
 User Query:
 {user_text}"""
+
 
     payload = {
         "model": ROUTER_MODEL_ID,
@@ -438,6 +455,15 @@ User Query:
         if res.status_code == 200:
             raw_output = res.json().get("message", {}).get("content", "").strip()
             norm_route = normalize_route(raw_output)
+
+            if step_r and orchestrator:
+                target_info = ROUTE_MODEL_MAP.get(norm_route, {})
+                orchestrator.complete_step(
+                    step_r,
+                    output_summary=f"Route: {norm_route} -> Model: {target_info.get('name', 'Phi-4 Mini')}",
+                    passed_to=target_info.get('name', 'Phi-4 Mini')
+                )
+
             return norm_route, {
                 "method": "qwen2.5:1.5b_router",
                 "raw_output": raw_output,
@@ -449,8 +475,18 @@ User Query:
     # Fallback to priority keyword router if router LLM fails
     fallback_route = fallback_keyword_routing(user_text)
     norm_route = normalize_route(fallback_route)
+
+    if step_r and orchestrator:
+        target_info = ROUTE_MODEL_MAP.get(norm_route, {})
+        orchestrator.fail_step(
+            step_r,
+            error_message=raw_output,
+            fallback_action=f"Priority Keyword Router -> {norm_route}"
+        )
+
     return norm_route, {
         "method": "fallback_priority_router",
         "raw_output": raw_output or "LLM Router unavailable/invalid. Applied priority rule.",
         "route": norm_route
     }
+

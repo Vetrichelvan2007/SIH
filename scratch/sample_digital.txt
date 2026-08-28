@@ -1,0 +1,2 @@
+# Digital Report
+This is pure text inside a digital document without any scanned images.

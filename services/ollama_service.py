@@ -84,3 +84,34 @@ def load_model(model_name: str) -> bool:
         return res.status_code == 200
     except Exception:
         return False
+
+OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
+
+def analyze_with_vision_model(prompt: str, base64_images: list, model_name: str = "qwen2.5vl:3b") -> str:
+    """
+    Calls Qwen2.5-VL-3B (or target vision model) with images and prompt via Ollama API.
+    """
+    if not base64_images:
+        return ""
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt or "Analyze this image and describe its key visual details, structure, text, charts, or content in detail.",
+                "images": base64_images
+            }
+        ],
+        "stream": False
+    }
+
+    try:
+        res = requests.post(OLLAMA_CHAT_URL, json=payload, timeout=60)
+        if res.status_code == 200:
+            return res.json().get("message", {}).get("content", "").strip()
+        else:
+            return f"[Vision Processing Error: Ollama returned status {res.status_code}]"
+    except Exception as exc:
+        return f"[Vision Processing Error: {str(exc)}]"
+

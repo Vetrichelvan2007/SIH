@@ -61,14 +61,24 @@ function App() {
         const formattedMessages = (data.messages || []).map(m => {
           const isUser = m.role === 'user';
           const timeStr = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now';
+          let parsedTrace = m.trace || null;
+          if (m.trace_json) {
+            try {
+              parsedTrace = typeof m.trace_json === 'string' ? JSON.parse(m.trace_json) : m.trace_json;
+            } catch (e) {
+              parsedTrace = null;
+            }
+          }
+
           return {
-            id: m.message_id,
+            id: m.message_id || `msg-${Math.random()}`,
             sender: isUser ? 'user' : 'ai',
-            text: m.content,
+            text: m.content || '',
             timestamp: timeStr,
             model: m.model_used || 'phi4-mini',
             modelName: m.model_used || 'Phi-4 Mini',
             route: m.route,
+            trace: parsedTrace,
             metrics: m.response_time ? { total_response_time: m.response_time } : null,
             pipeline: !isUser ? {
               stage: 'completed',
@@ -81,6 +91,7 @@ function App() {
             } : null
           };
         });
+
 
         setSessions(prev => {
           const exists = prev.some(s => s.id === chatId);
@@ -372,8 +383,9 @@ function App() {
   };
 
   // Handler to send a chat message and consume SSE stream
-  const handleSendMessage = async (userText) => {
-    if (!userText.trim() || modelStatus !== 'ready' || isSwitchingModel) return;
+  const handleSendMessage = async (userText, attachedFile = null) => {
+    const promptText = (userText || "").trim() || (attachedFile ? `Analyze attached file: ${attachedFile.filename}` : "");
+    if (!promptText || modelStatus !== 'ready' || isSwitchingModel) return;
 
     const timeString = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const userMsgId = `user-${Date.now()}`;
@@ -392,7 +404,8 @@ function App() {
     const userMessage = {
       id: userMsgId,
       sender: 'user',
-      text: userText,
+      text: promptText,
+      attachedFile: attachedFile,
       timestamp: timeString
     };
 
@@ -424,7 +437,7 @@ function App() {
     // Auto-title empty sessions (limit ~35 chars)
     let updatedTitle = activeSession?.title;
     if (!activeSession || activeSession.title === 'New Conversation' || !activeSession.messages || activeSession.messages.length === 0) {
-      const cleanPrompt = userText.trim();
+      const cleanPrompt = (attachedFile ? attachedFile.filename : promptText).trim();
       updatedTitle = cleanPrompt.length > 35 ? `${cleanPrompt.slice(0, 35).trim()}...` : cleanPrompt;
     }
 
@@ -448,19 +461,22 @@ function App() {
     const startTime = performance.now();
 
     try {
-      // 3. Initiate SSE connection to FastAPI backend with chat_id
+      // 3. Initiate SSE connection to FastAPI backend with chat_id and file_data
       const response = await fetch("http://localhost:8000/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          message: userText,
+          message: promptText,
           task: selectedTask,
           multi_model_mode: multiModelMode,
-          chat_id: currentChatId
+          chat_id: currentChatId,
+          file_id: attachedFile ? attachedFile.file_id : null,
+          file_data: attachedFile ? attachedFile.result : null
         })
       });
+
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -576,6 +592,7 @@ function App() {
                             model: newModelId,
                             modelName: newModelName,
                             metrics: finalMetrics,
+                            trace: event.trace || null,
                             pipeline: {
                               ...m.pipeline,
                               stage: 'completed',
@@ -584,6 +601,7 @@ function App() {
                               metrics: finalMetrics
                             }
                           };
+
                         }
                         return m;
                       })

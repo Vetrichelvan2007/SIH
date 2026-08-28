@@ -157,6 +157,9 @@ def get_detailed_models_status() -> dict:
                 if is_router:
                     role = "ROUTER"
                     role_display = "Query Router"
+                elif "vl" in name_lower or "vision" in name_lower:
+                    role = "VISION"
+                    role_display = "Vision Model"
                 elif "coder" in name_lower:
                     role = "CODING"
                     role_display = "Coding Model"

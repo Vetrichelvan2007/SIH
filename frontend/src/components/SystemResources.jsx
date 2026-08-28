@@ -42,8 +42,9 @@ const SystemResources = ({ system = null }) => {
             <span className="resource-bar-val">{ramPercent}%</span>
           </div>
           <div className="metric-bar">
-            <div className="metric-fill" style={{ width: `${ramPercent}%`, backgroundColor: 'var(--accent-cyan)' }} />
+            <div className="metric-fill" style={{ width: `${ramPercent}%`, backgroundColor: 'var(--primary)' }} />
           </div>
+
           <div className="resource-grid">
             <div className="res-grid-item">
               <span className="res-label">Total:</span>

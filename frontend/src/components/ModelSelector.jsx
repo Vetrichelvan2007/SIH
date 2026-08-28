@@ -43,17 +43,17 @@ const ModelSelector = ({
         )}
       </div>
       {/* Quick Task Switcher Buttons */}
-      <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border-subtle)', opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
+      <div style={{ display: 'flex', background: 'var(--surface-secondary)', padding: '3px', borderRadius: '8px', border: '1px solid var(--border)', opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>
         <button
           type="button"
           disabled={disabled}
           onClick={() => onSelectTask('coding')}
           style={{
-            background: selectedTask === 'coding' ? 'var(--accent-cyan-blue)' : 'transparent',
-            color: selectedTask === 'coding' ? '#000' : 'var(--text-secondary)',
+            background: selectedTask === 'coding' ? 'var(--primary)' : 'transparent',
+            color: selectedTask === 'coding' ? '#FFFFFF' : 'var(--text-secondary)',
             border: 'none',
             borderRadius: '6px',
-            padding: '4px 12px',
+            padding: '5px 12px',
             fontSize: '12px',
             fontWeight: 600,
             cursor: disabled ? 'not-allowed' : 'pointer',
@@ -72,11 +72,11 @@ const ModelSelector = ({
           disabled={disabled}
           onClick={() => onSelectTask('question')}
           style={{
-            background: selectedTask === 'question' ? 'var(--accent-cyan-blue)' : 'transparent',
-            color: selectedTask === 'question' ? '#000' : 'var(--text-secondary)',
+            background: selectedTask === 'question' ? 'var(--primary)' : 'transparent',
+            color: selectedTask === 'question' ? '#FFFFFF' : 'var(--text-secondary)',
             border: 'none',
             borderRadius: '6px',
-            padding: '4px 12px',
+            padding: '5px 12px',
             fontSize: '12px',
             fontWeight: 600,
             cursor: disabled ? 'not-allowed' : 'pointer',
@@ -90,6 +90,7 @@ const ModelSelector = ({
           <span>Question / General</span>
         </button>
       </div>
+
 
       {/* Model Status Dropdown Trigger */}
       <div className="model-selector-wrapper" ref={dropdownRef} style={{ opacity: disabled ? 0.5 : 1, pointerEvents: disabled ? 'none' : 'auto' }}>

@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Optional, List
 import requests
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -14,7 +14,17 @@ from models.phi_answer import stream_answer_response
 from services.system_monitor import get_system_status, get_detailed_models_status
 from services.model_manager import switch_model_stream
 from services.ollama_service import get_loaded_models, unload_model_and_verify
+from services.document_service import process_uploaded_file
+from agent.orchestrator import AgentOrchestrator
+from agent.trace_events import summarize_text, summarize_input_type
+from agent.context_manager import resolve_attachment_context, build_unified_context
+from agent.intent_classifier import classify_user_intent, TaskType
+from agent.metadata_handler import handle_metadata_query
+from agent.state import register_attachment
 import services.chat_db as chat_db
+
+
+
 from services.router_service import (
     get_multi_model_mode,
     set_multi_model_mode,
@@ -27,6 +37,7 @@ from services.router_service import (
     ROUTE_PRIORITY,
     VALID_ROUTES
 )
+
 
 # Global Response Generation Activity Flag
 IS_GENERATING_RESPONSE: bool = False
@@ -157,6 +168,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+UPLOAD_DIR = Path(__file__).parent / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 # Pydantic Schemas
 class ChatRequest(BaseModel):
     message: Optional[str] = Field(None, description="The input prompt or message from user")
@@ -164,6 +178,9 @@ class ChatRequest(BaseModel):
     task: str = Field("coding", description="Target task: 'coding' or 'question'/'general'")
     multi_model_mode: Optional[bool] = Field(None, description="Optional override for Multi-Model Mode")
     chat_id: Optional[str] = Field(None, description="Target chat session ID")
+    file_id: Optional[str] = Field(None, description="Uploaded file ID")
+    file_data: Optional[dict] = Field(None, description="Extracted file processing result dictionary")
+
 
 class CreateChatRequest(BaseModel):
     chat_id: Optional[str] = Field(None, description="Optional unique chat ID")
@@ -254,6 +271,76 @@ def unload_model_endpoint(req: UnloadModelRequest):
             "model": target,
             "message": f"Failed to unload '{target}'. Model may still be in use."
         }
+
+# ==================================================
+# FILE UPLOAD & PROCESSING REST API
+# ==================================================
+
+from fastapi import Form
+
+@app.post("/api/files/upload")
+async def upload_file_endpoint(
+    file: UploadFile = File(...),
+    prompt: Optional[str] = Form(None),
+    chat_id: Optional[str] = Form(None)
+):
+    """
+    File Upload & Processing API:
+    1. Saves uploaded file safely to local uploads directory.
+    2. Runs deterministic detector and router pipeline.
+    3. Triggers Qwen2.5-VL-3B vision model if visual understanding is required.
+    4. Registers attachment state under chat_id if provided.
+    5. Returns standardized ProcessingResult dictionary and execution trace.
+    """
+    if not file or not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded.")
+
+    file_id = str(uuid.uuid4())
+    safe_filename = f"{file_id}_{file.filename}"
+    file_path = UPLOAD_DIR / safe_filename
+
+    try:
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        orchestrator = AgentOrchestrator(request_id=f"req-{file_id[:8]}", chat_id=chat_id)
+
+        processed_result = process_uploaded_file(
+            file_path=str(file_path),
+            user_prompt=prompt or "",
+            filename=file.filename,
+            orchestrator=orchestrator
+        )
+
+        if chat_id:
+            register_attachment(
+                chat_id=chat_id,
+                filename=file.filename,
+                file_type=processed_result.get("file_type", "document"),
+                content_type=processed_result.get("content_type", "document"),
+                result_dict=processed_result,
+                attachment_id=file_id
+            )
+
+        trace_dict = orchestrator.to_dict()
+
+        return {
+            "status": "success",
+            "file_id": file_id,
+            "filename": file.filename,
+            "result": processed_result,
+            "trace": trace_dict
+        }
+
+
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"File processing error: {str(exc)}")
+
 
 # ==================================================
 # CHAT HISTORY REST APIS (SQLITE PERSISTENCE)
@@ -413,47 +500,159 @@ def chat_endpoint(request: ChatRequest):
     req_task = (request.task or "coding").lower().strip()
     target_chat_id = request.chat_id or str(uuid.uuid4())
 
+    orchestrator = AgentOrchestrator(chat_id=target_chat_id)
+
+    # 1. Resolve Attachment Context (New Upload or Persistent Conversation Attachment State)
+    attachment_res = resolve_attachment_context(
+        chat_id=target_chat_id,
+        user_query=user_text,
+        current_file_data=request.file_data,
+        orchestrator=orchestrator
+    )
+
+    # 2. User Intent Classification (Separates User Goal from Document Subject Matter)
+    intent = classify_user_intent(user_text, attachment_info=attachment_res)
+    s_intent = orchestrator.start_step(
+        type="router",
+        component="intent_classifier",
+        action="user_intent_classification",
+        input_summary=f"Query: '{summarize_text(user_text, 60)}'",
+        passed_to=intent["selected_model"]
+    )
+    orchestrator.complete_step(
+        s_intent,
+        output_summary=f"Task: {intent['task_type']} | Domain: {intent['domain']} -> {intent['selected_model']}"
+    )
+
+    # 3. Direct Metadata Tool Response (No LLM required for filename/metadata queries)
+    if intent["task_type"] == TaskType.DOCUMENT_METADATA.value:
+        meta_text = handle_metadata_query(user_text, attachment_info=attachment_res, orchestrator=orchestrator)
+        chat_db.add_message(chat_id=target_chat_id, role="user", content=user_text)
+        chat_db.add_message(chat_id=target_chat_id, role="assistant", content=meta_text, model_used="Metadata Tool")
+
+        def generate_meta_events():
+            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received", "chat_id": target_chat_id})
+            yield sse_format({"type": "token", "content": meta_text})
+            yield sse_format({
+                "type": "complete",
+                "chat_id": target_chat_id,
+                "model": "metadata_tool",
+                "model_name": "Metadata Tool (No LLM)",
+                "trace": orchestrator.to_dict()
+            })
+
+        return StreamingResponse(
+            generate_meta_events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+        )
+
+    # 4. Hallucination Prevention Guard (Document query with missing attachment)
+    if not attachment_res.get("resolved") and attachment_res.get("reason") == "missing_attachment":
+        notice_text = attachment_res["notice_response"]
+        chat_db.add_message(chat_id=target_chat_id, role="user", content=user_text)
+        chat_db.add_message(chat_id=target_chat_id, role="assistant", content=notice_text, model_used="Phi-4 Mini")
+
+        def generate_notice_events():
+            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received", "chat_id": target_chat_id})
+            yield sse_format({"type": "token", "content": notice_text})
+            yield sse_format({
+                "type": "complete",
+                "chat_id": target_chat_id,
+                "model": "phi4-mini",
+                "model_name": "Phi-4 Mini",
+                "trace": orchestrator.to_dict()
+            })
+
+        return StreamingResponse(
+            generate_notice_events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+        )
+
+    # Context Window Trimming: Retrieve last N messages for model prompt
+    model_messages = chat_db.get_trimmed_model_messages(target_chat_id, max_messages=15)
+
+    # Construct Unified Prompt Context
+    effective_user_prompt = build_unified_context(
+        user_query=user_text,
+        attachment_res=attachment_res,
+        chat_history=model_messages,
+        orchestrator=orchestrator
+    )
+
     # Save user message to persistent SQLite database
-    chat_db.add_message(chat_id=target_chat_id, role="user", content=user_text)
+    chat_db.add_message(chat_id=target_chat_id, role="user", content=effective_user_prompt)
 
     def generate_events():
         global IS_GENERATING_RESPONSE
         IS_GENERATING_RESPONSE = True
-        # Initialize task_clean at the top of generate_events scope to guarantee it exists in all paths
-        task_clean = "coding" if req_task in ["coding", "code"] else "general"
-        selected_route = "CODING" if task_clean == "coding" else "GENERAL"
+        
+        task_clean = intent["domain"].lower()
+        selected_route = intent["domain"].upper()
         start_time = time.perf_counter()
 
         try:
-            # 1. Query received
-            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received", "chat_id": target_chat_id})
+            # 1. Input Detection Step with Precise Format
+            step_in = orchestrator.start_step(
+                type="input",
+                component="input_detector",
+                action="input_type_detection",
+                input_summary=f"Query: '{summarize_text(user_text, 70)}'",
+                passed_to="context_builder" if attachment_res.get("resolved") else ("router" if use_multi_model else "model_selector")
+            )
 
-            # 2. Sent to backend / processing
+            yield sse_format({"type": "status", "stage": "query_received", "message": "Query received", "chat_id": target_chat_id})
+            orchestrator.complete_step(step_in, output_summary=f"Input Type: {summarize_input_type(attachment_res)}")
+
+            # 2. Context Building Status Events
+            if attachment_res.get("resolved"):
+                att_filename = attachment_res.get("filename", "Attached File")
+                yield sse_format({"type": "status", "stage": "extracting_document_content", "message": f"Retrieved attachment context from '{att_filename}'...", "chat_id": target_chat_id})
+                if attachment_res.get("visual_content") or attachment_res.get("analysis"):
+                    yield sse_format({"type": "status", "stage": "processing_visual_content", "message": "Visual content analysis integrated via Qwen2.5-VL-3B", "chat_id": target_chat_id})
+                yield sse_format({"type": "status", "stage": "preparing_context", "message": "Preparing unified context for LLM execution...", "chat_id": target_chat_id})
+
+            # Add User Prompt Provenance Source
+            orchestrator.add_context_source(
+                source="user_input",
+                type="user_prompt",
+                content_summary=summarize_text(user_text, 70)
+            )
+
+            # 3. Sent to backend / processing
             backend_start = time.perf_counter()
             yield sse_format({"type": "status", "stage": "backend_processing", "message": "Request sent to FastAPI backend", "chat_id": target_chat_id})
 
             if not use_multi_model:
                 # ==================================================
                 # 1. SINGLE-MODEL MODE (OFF - DEFAULT)
-                # ZERO ROUTING OVERHEAD, DIRECT MODEL PIPELINE
+                # INTENT-BASED MODEL SELECTION (Phi-4 Mini vs Qwen2.5-Coder)
                 # ==================================================
-                is_coding = task_clean == "coding"
-                task_label = "Coding" if is_coding else "Question / General"
-                model_id = "qwen2.5-coder" if is_coding else "phi4-mini"
-                model_name = "Qwen2.5-Coder" if is_coding else "Phi-4 Mini"
+                model_id = intent["model_id"]
+                model_name = intent["selected_model"]
+                task_label = f"User Intent [{intent['task_type']}]"
+
+                step_sel = orchestrator.start_step(
+                    type="model",
+                    component="model_selector",
+                    model=model_id,
+                    action="direct_model_selection",
+                    input_summary=f"Task: {intent['task_type']} | Intent: {intent['user_intent']}",
+                    passed_to=model_name
+                )
+                orchestrator.complete_step(step_sel, output_summary=f"Selected {model_name} for Task {intent['task_type']}")
 
                 yield sse_format({"type": "status", "stage": "task_selected", "message": f"Task identified: {task_label}", "task": task_clean, "task_label": task_label, "multi_model": False, "chat_id": target_chat_id})
                 yield sse_format({"type": "status", "stage": "model_selected", "message": f"Model selected: {model_name}", "model": model_id, "model_name": model_name, "chat_id": target_chat_id})
             else:
                 # ==================================================
                 # 2. MULTI-MODEL MODE (ON - OPTIONAL)
-                # ROUTER: Qwen2.5 1.5B with Memory Management & Safety Verification
+                # ROUTER: Qwen2.5 1.5B with Intent Override Protection
                 # ==================================================
                 yield sse_format({"type": "status", "stage": "multi_model_routing", "message": "Multi-Model Mode Active: Preparing Qwen2.5 1.5B Router...", "multi_model": True, "chat_id": target_chat_id})
 
-                # Step 1 & 2: Ensure Router is loaded (unloads current inference model if memory is insufficient)
                 router_loaded, router_msg = ensure_router_loaded()
-                
                 router_safe, _, router_metrics = check_resource_safety("qwen2.5:1.5b")
                 yield sse_format({
                     "type": "status",
@@ -465,53 +664,28 @@ def chat_endpoint(request: ChatRequest):
                     "chat_id": target_chat_id
                 })
 
-                # Step 3: Classify query via Router (Qwen2.5 1.5B with fallback)
+                # Classify query via Router
                 try:
-                    raw_route, router_info = classify_query(user_text)
+                    raw_route, router_info = classify_query(user_text, orchestrator=orchestrator)
                     selected_route = str(raw_route or "GENERAL").strip().upper()
-                    if selected_route not in VALID_ROUTES:
-                        selected_route = "GENERAL"
                 except Exception as r_err:
                     print(f"Router error: {r_err}")
                     selected_route = "GENERAL"
                     router_info = {"method": "router_error_fallback", "message": str(r_err), "route": "GENERAL"}
 
-                # Explicit Route-to-Model Mapping
+                # INTENT OVERRIDE: If intent classifier determined document/general QA, do NOT let document code terms force CODING!
+                if intent["domain"] in ["DOCUMENT", "GENERAL"] and selected_route == "CODING" and intent["task_type"] not in [TaskType.CODE_GENERATION.value, TaskType.CODE_DEBUGGING.value, TaskType.CODE_EXPLANATION.value]:
+                    selected_route = "DOCUMENT" if intent["domain"] == "DOCUMENT" else "GENERAL"
+                    router_info["intent_override"] = "Overrode false CODING classification to DOCUMENT based on User Intent"
+
                 if selected_route == "CODING":
                     target_model_id = "qwen2.5-coder"
                     target_model_name = "Qwen2.5-Coder"
                     task_clean = "coding"
-                elif selected_route == "GENERAL":
-                    target_model_id = "phi4-mini"
-                    target_model_name = "Phi-4 Mini"
-                    task_clean = "general"
-                elif selected_route == "REASONING":
-                    target_model_id = "phi4-mini"
-                    target_model_name = "Phi-4 Mini"
-                    task_clean = "reasoning"
-                elif selected_route == "RAG":
-                    target_model_id = "phi4-mini"
-                    target_model_name = "Phi-4 Mini"
-                    task_clean = "rag"
-                elif selected_route == "DOCUMENT":
-                    target_model_id = "phi4-mini"
-                    target_model_name = "Phi-4 Mini"
-                    task_clean = "document"
                 else:
-                    selected_route = "GENERAL"
                     target_model_id = "phi4-mini"
                     target_model_name = "Phi-4 Mini"
-                    task_clean = "general"
-
-                # Backend Debug Logging
-                raw_out_str = router_info.get("raw_output", selected_route)
-                print("\n" + "="*50)
-                print("[ROUTER]")
-                print(f"Query: {user_text}")
-                print(f"Raw output: {raw_out_str}")
-                print(f"Normalized route: {selected_route}")
-                print(f"Selected model: {target_model_name}")
-                print("="*50 + "\n")
+                    task_clean = "document" if selected_route == "DOCUMENT" else "general"
 
                 yield sse_format({
                     "type": "status",
@@ -524,12 +698,9 @@ def chat_endpoint(request: ChatRequest):
                 })
 
                 task_label = f"Multi-Model Route [{selected_route}]"
-
-                # Step 4 & 5: Ensure Specialist Model is loaded (unloads Router model if memory safety requires it)
                 spec_loaded, spec_msg = ensure_specialist_loaded(target_model_id)
 
                 if not spec_loaded:
-                    # Safe Fallback to default active model
                     yield sse_format({
                         "type": "status",
                         "stage": "resource_fallback",
@@ -552,6 +723,7 @@ def chat_endpoint(request: ChatRequest):
             is_document = task_clean == "document"
             is_general = task_clean == "general"
 
+
             # Context Window Trimming: Retrieve last N messages for model prompt from persistent SQLite chat DB
             model_messages = chat_db.get_trimmed_model_messages(target_chat_id, max_messages=15)
             
@@ -564,7 +736,16 @@ def chat_endpoint(request: ChatRequest):
             # Connected to local Ollama API
             yield sse_format({"type": "status", "stage": "ollama_connecting", "message": "Connecting to local Ollama API", "chat_id": target_chat_id})
 
-            # Model processing locally
+            # Model processing locally & final generator trace step
+            step_gen = orchestrator.start_step(
+                type="model",
+                component="inference_engine",
+                model=model_name,
+                action="final_response_generation",
+                input_summary=f"User prompt + {len(orchestrator.context_sources)} context sources",
+                passed_to="User Interface"
+            )
+
             yield sse_format({"type": "status", "stage": "ollama_processing", "message": f"{model_name} is processing locally...", "chat_id": target_chat_id})
 
             model_start = time.perf_counter()
@@ -589,6 +770,11 @@ def chat_endpoint(request: ChatRequest):
 
             full_response = "".join(accumulated_tokens)
 
+            orchestrator.complete_step(step_gen, output_summary=f"Generated {len(full_response)} characters")
+            orchestrator.set_final_generator(model_name=model_name, model_id=model_id, is_vision=False)
+
+            trace_dict = orchestrator.to_dict()
+
             # Update legacy conversation.json
             legacy_history.append({"role": "assistant", "content": full_response})
             save_conversation(legacy_history)
@@ -603,7 +789,7 @@ def chat_endpoint(request: ChatRequest):
                 response_time=total_time
             )
 
-            # Completed event with timing metrics
+            # Completed event with timing metrics & full trace dictionary
             yield sse_format({"type": "status", "stage": "completed", "message": "Response completed", "chat_id": target_chat_id})
 
             yield sse_format({
@@ -612,6 +798,7 @@ def chat_endpoint(request: ChatRequest):
                 "model": model_id,
                 "model_name": model_name,
                 "multi_model_mode": use_multi_model,
+                "trace": trace_dict,
                 "metrics": {
                     "total_response_time": total_time,
                     "backend_time": backend_overhead_time,
@@ -628,6 +815,7 @@ def chat_endpoint(request: ChatRequest):
             yield sse_format({"type": "error", "stage": "error", "message": f"Server processing error: {str(exc)}"})
         finally:
             IS_GENERATING_RESPONSE = False
+
 
     return StreamingResponse(
         generate_events(),

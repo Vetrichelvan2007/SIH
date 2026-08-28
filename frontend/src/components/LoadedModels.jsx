@@ -2,24 +2,25 @@ import React, { useState } from 'react';
 
 const getStatusBadge = (status, isProtected) => {
   if (isProtected || status === 'PROTECTED') {
-    return { label: 'Protected', className: 'status-indicator protected', dotColor: 'var(--accent-cyan)', bg: 'rgba(6, 182, 212, 0.2)' };
+    return { label: 'Protected', className: 'status-indicator protected', dotColor: 'var(--primary)', bg: 'var(--primary-light)' };
   }
   const upper = (status || '').toUpperCase();
   switch (upper) {
     case 'ACTIVE':
-      return { label: 'Active', className: 'status-indicator active', dotColor: 'var(--accent-emerald)', bg: 'rgba(16, 185, 129, 0.15)' };
+      return { label: 'Active', className: 'status-indicator active', dotColor: 'var(--success)', bg: 'var(--success-bg)' };
     case 'LOADED':
-      return { label: 'Loaded', className: 'status-indicator loaded', dotColor: 'var(--accent-cyan)', bg: 'rgba(6, 182, 212, 0.15)' };
+      return { label: 'Loaded', className: 'status-indicator loaded', dotColor: 'var(--primary)', bg: 'var(--primary-light)' };
     case 'LOADING':
-      return { label: 'Loading', className: 'status-indicator loading', dotColor: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)' };
+      return { label: 'Loading', className: 'status-indicator loading', dotColor: 'var(--warning)', bg: 'var(--warning-bg)' };
     case 'UNLOADING':
-      return { label: 'Unloading', className: 'status-indicator unloading', dotColor: '#f97316', bg: 'rgba(249, 115, 22, 0.15)' };
+      return { label: 'Unloading', className: 'status-indicator unloading', dotColor: 'var(--warning)', bg: 'var(--warning-bg)' };
     case 'FAILED':
-      return { label: 'Failed', className: 'status-indicator failed', dotColor: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)' };
+      return { label: 'Failed', className: 'status-indicator failed', dotColor: 'var(--error)', bg: 'var(--error-bg)' };
     default:
-      return { label: upper || 'Unknown', className: 'status-indicator', dotColor: 'var(--text-muted)', bg: 'rgba(255, 255, 255, 0.08)' };
+      return { label: upper || 'Unknown', className: 'status-indicator', dotColor: 'var(--text-muted)', bg: 'var(--surface-secondary)' };
   }
 };
+
 
 const formatMemoryMb = (mb) => {
   if (mb === undefined || mb === null) return '0 MB';
