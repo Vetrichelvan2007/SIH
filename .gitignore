@@ -19,7 +19,11 @@ frontend/dist/
 # IDE
 .vscode/
 .idea/
-chats.db
-conversations.db
-docs.db
+chats.db*
+chats.d*
+conversations.db*
+docs.db*
+*.db
+*.db-*
+
 
