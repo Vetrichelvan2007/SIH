@@ -3,32 +3,35 @@
 <div align="center">
 
 ![Privacy](https://img.shields.io/badge/Privacy-100%25%20Air--Gapped%20Local-10B981?style=for-the-badge&logo=shield)
-![AI Engine](https://img.shields.io/badge/AI%20Engine-Ollama%20Local-3B82F6?style=for-the-badge)
+![AI Models](https://img.shields.io/badge/AI%20Models-Qwen2.5--Coder%20%7C%20Phi--4--Mini%20%7C%20Qwen2.5--VL--3B-3B82F6?style=for-the-badge)
 ![Backend](https://img.shields.io/badge/Backend-FastAPI%20Python-009688?style=for-the-badge&logo=fastapi)
 ![Frontend](https://img.shields.io/badge/Frontend-React%2019%20%2B%20Vite-61DAFB?style=for-the-badge&logo=react)
 ![Hardware](https://img.shields.io/badge/Hardware-NVIDIA%20GPU%20Accelerated-76B900?style=for-the-badge&logo=nvidia)
 
 **A high-performance, enterprise-grade, localized AI workbench that runs entirely on local hardware.**  
-*Zero cloud data egress • Zero third-party telemetry • Air-gapped privacy*
+*Zero cloud data egress • Zero third-party telemetry • Air-gapped document & vision processing*
 
 </div>
 
 ---
 
 > [!IMPORTANT]
-> **100% Sovereign AI Architecture**: All prompt embeddings, code context, and model inferences execute locally via **Ollama** on your GPU/CPU hardware. No cloud APIs or external servers are called.
+> **100% Sovereign Air-Gapped Architecture**: Prompt embeddings, code execution context, document text extractions, and multimodal vision inferences execute locally via **Ollama** on your GPU/CPU hardware. No external APIs or cloud services are invoked.
 
 ---
 
-## 🌟 Key Highlights
+## 🌟 Key Features
 
-- 💻 **Coding Specialist**: Integrated with **Qwen2.5-Coder** for code synthesis, refactoring, and debugging.
-- 💬 **General Q&A Reasoning**: Integrated with **Phi-4 Mini** for fast analytical synthesis and technical Q&A.
-- ⚡ **Live Execution Pipeline**: Real-time SSE status visualizer (`Query Received` ➔ `Task Selected` ➔ `Ollama Connected` ➔ `Streaming Response`).
-- ⏱️ **Response Timing Metrics**: Millisecond-accurate execution timer measuring backend overhead and local GPU generation speeds.
-- 🧠 **Persistent Conversation Memory**: Local JSON storage (`conversation.json`) maintaining multi-turn context.
-- 🎨 **Industrial Enterprise UI**: Modern dark-mode interface with monospace code blocks, line numbers, and one-click copy buttons.
-- 📡 **Server-Sent Events (SSE)**: Real-time token streaming direct from local model layers.
+- 💻 **Coding Specialist (`Qwen2.5-Coder`)**: High-speed code synthesis, refactoring, bug fixes, and technical documentation.
+- 💬 **General Reasoning (`Phi-4 Mini`)**: Fast analytical reasoning, general synthesis, and structured Q&A.
+- 👁️ **Visual Multimodal Analysis (`Qwen2.5-VL-3B`)**: Visual page layout extraction, OCR, image analysis, and document page processing.
+- 📄 **Multi-Format Document Processing**: Modular tools for ingesting PDF, DOCX, PPTX, XLSX, CSV, and TXT files with context provenance tracking.
+- 🎯 **Intent-Based Dynamic Router**: Classifies **User Intent** (e.g., Document QA vs Coding Task) rather than document content, ensuring accurate model selection.
+- ⚙️ **Transparent Agent Execution Trace**: Compact collapsed trace header (`44px`) expanding into a horizontal step timeline with pill badges and click-to-inspect detail modals (`Inspect →`).
+- ⚡ **Real-Time Execution Pipeline**: Real-time stage tracker visualizing query reception, document extraction, vision analysis, context window assembly, and token streaming.
+- 📎 **Attachment-Aware Conversation Context**: Maintains multi-turn attached document references across follow-up queries.
+- 📊 **Telemetry & Loaded Models Monitor**: Real-time CPU, RAM, GPU, and VRAM utilization monitoring with one-click model loading and unloading.
+- 🎨 **Enterprise Workbench Interface**: Clean light and dark theme options with custom code block copy headers, line numbers, and formatted lists.
 
 ---
 
@@ -36,19 +39,25 @@
 
 ```mermaid
 flowchart TD
-    User([👤 User / Browser]) <-->|HTTP / SSE Stream| Frontend[🌐 React 19 Frontend\nlocalhost:5173]
-    Frontend <-->|REST & Event Stream| Backend[🐍 FastAPI Controller\nmain.py :8000]
-    
-    subgraph Controller ["Central Controller & Task Router"]
-        Backend -->|Task: coding| QwenModule[📦 models/qwen_coder.py]
-        Backend -->|Task: question| PhiModule[📦 models/phi_answer.py]
-        Backend <-->|Read / Write| JSONStorage[(📄 conversation.json)]
+    User([👤 User Browser]) <-->|HTTP / REST & SSE Stream| Frontend[🌐 React 19 Frontend\nlocalhost:5173]
+    Frontend <-->|FastAPI Endpoints| Backend[🐍 FastAPI Controller\nmain.py :8000]
+
+    subgraph AgentLayer ["Agent Core & Router Layer"]
+        Backend --> Orchestrator[⚙️ agent/orchestrator.py]
+        Orchestrator --> Classifier[🎯 agent/intent_classifier.py]
+        Orchestrator --> ContextMgr[🧠 agent/context_manager.py]
+        Orchestrator --> TraceRecorder[📋 agent/execution_trace.py]
     end
 
-    subgraph LocalEngine ["Local Ollama Runtime"]
-        QwenModule <-->|POST /api/chat stream=true| Ollama[🦙 Ollama Server\nlocalhost:11434]
-        PhiModule <-->|POST /api/chat stream=true| Ollama
-        Ollama <-->|GPU / VRAM| Compute[⚡ NVIDIA GPU Acceleration]
+    subgraph ToolingLayer ["Modular Tools Processing Layer"]
+        Orchestrator --> DocTools[📄 tools/documents/\npdf, docx, pptx, xlsx, txt]
+        Orchestrator --> VisionTools[👁️ tools/images/\nvision_router.py]
+    end
+
+    subgraph ServiceLayer ["Model Lifecycle & Engine"]
+        Orchestrator --> ModelMgr[📦 services/model_manager.py]
+        ModelMgr <-->|Ollama API| Ollama[🦙 Ollama Local Server\nlocalhost:11434]
+        Ollama <-->|CUDA / VRAM| GPU[⚡ Local NVIDIA GPU Acceleration]
     end
 ```
 
@@ -58,131 +67,136 @@ flowchart TD
 
 ```text
 SIH/
-│
-├── main.py                   # Central FastAPI Controller & Task Router
+├── main.py                   # Central FastAPI app & endpoints entrypoint
 ├── requirements.txt          # Python dependencies
-├── conversation.json         # Single-user local conversation memory
-├── README.md                 # Documentation
+├── README.md                 # Complete documentation
 │
-├── models/                   # Modular Model Handlers Package
-│   ├── __init__.py           # Package exports
-│   ├── qwen_coder.py         # Qwen2.5-Coder Ollama streaming handler
-│   └── phi_answer.py         # Phi-4-mini Ollama streaming handler
+├── agent/                    # Core Agentic Intelligence Architecture
+│   ├── orchestrator.py       # Main request orchestrator & pipeline executor
+│   ├── intent_classifier.py  # User intent classifier (Document QA vs Coding)
+│   ├── context_manager.py    # Multi-turn conversation state & context window
+│   ├── execution_trace.py    # Agent trace logger & step detail collector
+│   ├── trace_events.py       # Step event definitions
+│   ├── metadata_handler.py   # Attachment metadata extractor
+│   └── state.py              # Agent state machine schema
 │
+├── tools/                    # Non-LLM Processing Tools Architecture
+│   ├── documents/            # Document extraction tools
+│   │   ├── detector.py       # File extension & MIME type detector
+│   │   ├── pdf_processor.py  # PDF page text & structure extractor
+│   │   ├── docx_processor.py # DOCX document parser
+│   │   ├── pptx_processor.py # Presentation slide parser
+│   │   ├── xlsx_processor.py # Spreadsheet & CSV table parser
+│   │   ├── text_normalizer.py# Clean text normalization & chunking
+│   │   └── document_router.py# Document pipeline router
+│   └── images/               # Image & Vision Processing tools
+│       ├── image_processor.py# Image loader & byte preparer
+│       └── vision_router.py  # Qwen2.5-VL-3B local vision inference
+│
+├── services/                 # Lifecycle & System Services
+│   ├── model_manager.py      # Ollama model loader, unloader & VRAM monitor
+│   └── document_service.py   # High-level document ingestion service
+│
+├── uploads/                  # Local storage for attached files
 └── frontend/                 # React 19 + Vite Frontend Workspace
-    ├── package.json          # Node dependencies
-    ├── vite.config.js        # Vite build configuration
-    │
+    ├── package.json          # Node packages & build scripts
+    ├── vite.config.js        # Vite dev server configuration
     └── src/
-        ├── App.jsx           # Main application state & SSE stream reader
-        ├── index.css         # Dark enterprise design system & variables
-        ├── App.css           # Grid layouts, pipeline animations & styling
+        ├── App.jsx           # Master layout & API event state management
+        ├── App.css           # Workspace styling & design system
+        ├── index.css         # Typography, HSL color tokens & resets
         └── components/
-            ├── ExecutionPipeline.jsx # Real-time execution status tracker
-            ├── ChatWindow.jsx        # Workspace header & message viewport
-            ├── ChatMessage.jsx       # User/AI bubbles & code block renderer
-            ├── MessageInput.jsx      # Text input area with Enter listener
-            ├── ModelSelector.jsx     # Task toggles ([Coding] | [Question])
-            ├── ModelStatus.jsx       # Status badge (Ready/Loading/Generating)
-            ├── Sidebar.jsx           # Live Available Models list & metrics
-            └── Icons.jsx             # SVG icon components library
+            ├── AgentTrace.jsx        # Compact trace bar & horizontal timeline
+            ├── ExecutionPipeline.jsx # Real-time pipeline status tracker
+            ├── ChatWindow.jsx        # Top header & message viewport
+            ├── ChatMessage.jsx       # Assistant cards & document pipeline UI
+            ├── MessageInput.jsx      # Input composer & attachment preview card
+            ├── ModelSelector.jsx     # Manual model selector dropdown
+            ├── LoadedModels.jsx      # Loaded models & unload controls
+            ├── SystemResources.jsx   # Live CPU/RAM/GPU telemetry bars
+            ├── Sidebar.jsx           # Session history, search & GPU node info
+            └── Icons.jsx             # SVG icon component library
 ```
 
 ---
 
-## 📊 Supported Models Matrix
+## 📊 Supported Local AI Models Matrix
 
-| Task Category | Recommended Model | Model ID | Runtime | Target Use Case | Status |
-| :--- | :--- | :--- | :--- | :--- | :---: |
-| **Coding** | **Qwen2.5-Coder** | `qwen2.5-coder` | Ollama | Python, JS, C++, SQL generation & debugging | `Active` |
-| **Question / General** | **Phi-4 Mini** | `phi4-mini` | Ollama | Technical Q&A, reasoning, and synthesis | `Active` |
-| **Document Analysis** | *Enterprise OCR/RAG* | `coming-soon` | Local Vector Store | PDF extraction & document search | `Placeholder` |
-| **Vision / Multimodal** | *Visual LLM* | `coming-soon` | Local Vision Engine | Image analysis & visual inspection | `Placeholder` |
+| Task Category | Recommended Model | Model ID | Engine | Primary Function |
+| :--- | :--- | :--- | :--- | :--- |
+| **General Q&A** | **Phi-4 Mini** | `phi4-mini` | Ollama | Fast analytical reasoning, synthesis, and Q&A |
+| **Coding & Tech** | **Qwen2.5-Coder** | `qwen2.5-coder` | Ollama | Python, JS, C++, SQL generation & debugging |
+| **Vision & Layout** | **Qwen2.5-VL-3B** | `qwen2.5vl:3b` | Ollama | Visual page layout analysis, OCR & image inspection |
 
 ---
 
-## ⚡ Live Execution Pipeline & Metrics
+## ⚡ Agent Execution Trace & Pipeline
 
-When a query is dispatched, the **ExecutionPipeline** widget renders real-time backend stage transitions:
-
+### Collapsed Trace State (Default)
 ```text
-⚡ Local Execution Pipeline
- ├── ✓ Query received
- ├── ✓ Request sent to backend
- ├── ✓ Task identified: Coding
- ├── ✓ Model selected: Qwen2.5-Coder
- ├── ✓ Connected to local Ollama API
- ├── ◉ Qwen2.5-Coder is processing locally...
- ├── ◉ Receiving streamed tokens...
- └── ✓ Response complete (Completed in 4.82s)
+┌──────────────────────────────────────────────────────────────────┐
+│ ⚙ Agent Execution Trace    6 Steps • Completed in 13.66s        ˅│
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-> [!TIP]
-> Upon completion, the pipeline collapses into a compact summary badge:  
-> `✓ Generated locally • Qwen2.5-Coder • Completed in 4.82s`
+### Expanded Horizontal Step Timeline
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│ ⚙ Agent Execution Trace                          6 Steps        │
+│                                                                  │
+│ [✓ Query Received] → [✓ Attachment Resolved] → [✓ Document QA]   │
+│ 0.00s               0.01s                      0.42s             │
+│                                                                  │
+│ Sources Used                                                     │
+│ [attachment_resolver] [document_processor] [user_input]         │
+│                                                                  │
+│ Final Generator: Phi-4 Mini                Completed in 13.66s   │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## ⚙️ Prerequisites & System Requirements
+## ⚙️ Requirements & Prerequisites
 
-### Hardware Requirements
-- **NVIDIA GPU**: Recommended (e.g. RTX 3060 / 4060 or higher with **6 GB+ VRAM**).
+### Minimum Hardware
+- **NVIDIA GPU**: Recommended **6 GB+ VRAM** (e.g. RTX 3050 / 3060 / 4060).
 - **System RAM**: **16 GB+** recommended.
-- **Storage**: SSD with at least 10 GB free space for local quantized model weights.
+- **Disk Space**: 15 GB free space for local model weights.
 
-### Software Prerequisites
-- **Python**: `3.10+` (Ensure `Add Python to PATH` is enabled)
+### Software Requirements
+- **Python**: `3.10+`
 - **Node.js**: `v18.0.0+` & `npm`
-- **Ollama**: Installed and available in PATH
-- **NVIDIA Drivers**: Latest drivers with CUDA support
+- **Ollama**: Installed and added to system PATH
+- **NVIDIA Drivers**: Installed with CUDA support
 
 ---
 
-## 🚀 Step-by-Step Setup Guide
+## 🚀 Quickstart Guide
 
-### Step 1: Install & Verify System Tools
+### 1. Download Local Ollama Models
 
-Check tool versions in PowerShell:
-
-```powershell
-python --version
-node --version
-npm --version
-ollama --version
-nvidia-smi
-```
-
----
-
-### Step 2: Download Local Ollama AI Models
-
-Pull the required models into your local Ollama store:
+Pull the required models in terminal:
 
 ```powershell
-# 1. Download Qwen2.5-Coder for coding tasks
+# 1. General Reasoning Model
+ollama pull phi4-mini
+
+# 2. Coding Specialist Model
 ollama pull qwen2.5-coder
 
-# 2. Download Phi-4 Mini for general Q&A tasks
-ollama pull phi4-mini
-```
-
-Verify installed models:
-
-```powershell
-ollama list
+# 3. Vision Multimodal Model
+ollama pull qwen2.5vl:3b
 ```
 
 ---
 
-### Step 3: Set Up Python Virtual Environment & Dependencies
+### 2. Install Backend Dependencies
 
-From the project root `D:\New folder\SIH`:
+From the project root directory:
 
 ```powershell
-# Create virtual environment
+# Create & activate Python virtual environment
 python -m venv .venv
-
-# Activate environment (Windows PowerShell)
 .venv\Scripts\activate
 
 # Install backend dependencies
@@ -191,9 +205,9 @@ pip install -r requirements.txt
 
 ---
 
-### Step 4: Set Up Frontend Dependencies
+### 3. Install Frontend Dependencies
 
-From the frontend directory `D:\New folder\SIH\frontend`:
+From the `frontend` directory:
 
 ```powershell
 cd frontend
@@ -202,78 +216,36 @@ npm install
 
 ---
 
-## 🖥️ Running the Complete Workbench
+## 🖥️ Running the Application
 
-Launch the system across 3 separate terminal windows:
+Launch the 3 core processes:
 
-### Terminal 1: Ollama Server
+### Terminal 1: Ollama Engine
 ```powershell
 ollama serve
 ```
-*(Runs locally at `http://localhost:11434`)*
 
-### Terminal 2: FastAPI Controller Backend
+### Terminal 2: FastAPI Backend Server
 ```powershell
-cd "D:\New folder\SIH"
 .venv\Scripts\activate
-uvicorn main:app --reload --port 8000
+python main.py
 ```
-*(Runs at `http://localhost:8000` • Swagger Docs at `http://localhost:8000/docs`)*
+*(Runs backend at `http://localhost:8000` • API docs at `http://localhost:8000/docs`)*
 
-### Terminal 3: React Frontend UI
+### Terminal 3: Vite React Frontend
 ```powershell
-cd "D:\New folder\SIH\frontend"
+cd frontend
 npm run dev
 ```
-*(Opens dev server at `http://localhost:5173`)*
+*(Access web application UI at `http://localhost:5173`)*
 
 ---
 
-## 🛠️ Useful Commands & GPU Monitoring
-
-### Check Loaded Models & GPU Offloading
-```powershell
-ollama ps
-```
-*Example Output:*
-```text
-NAME                    SIZE      PROCESSOR
-qwen2.5-coder:latest    5.1 GB    100% GPU
-```
-
-### Real-time NVIDIA GPU Monitoring
-```powershell
-nvidia-smi -l 1
-```
-*Monitors GPU VRAM, temperature, and compute utilization every second. Press `Ctrl + C` to exit.*
-
----
-
-## 🔍 Troubleshooting Guide
-
-| Issue | Cause | Solution |
-| :--- | :--- | :--- |
-| `503 Service Unavailable` | Ollama server is offline | Run `ollama serve` in terminal. |
-| `404 Model Not Found` | Target model not pulled yet | Run `ollama pull qwen2.5-coder` or `ollama pull phi4-mini`. |
-| `FastAPI Connection Failed` | Backend server not running | Ensure `uvicorn main:app --reload` is active on port 8000. |
-| `Port 8000 in use` | Port conflict | Run `uvicorn main:app --reload --port 8001` and update API URL. |
-
----
-
-## 🔮 Future Development Roadmap
-
-- [ ] **Automatic Task Detection**: Classify incoming prompts automatically to route between `Qwen2.5-Coder` and `Phi-4 Mini`.
-- [ ] **Local RAG Pipeline**: Local vector store indexing (FAISS/Chroma) for querying PDF/txt documentation.
-- [ ] **Code Execution Sandbox**: Isolated Docker/Wasm container for testing AI-generated code snippets.
-- [ ] **Multi-User Database**: Replace `conversation.json` with SQLite/PostgreSQL supporting user accounts & sessions.
-- [ ] **Enterprise Security & Audit**: Local audit logs and fine-grained access control.
-
----
-
-## 🔒 Sovereign AI Principle
+## 🔒 Confidentiality & Air-Gapped Security Guarantee
 
 ```text
-User Input ➔ React UI ➔ FastAPI Controller ➔ Local Ollama ➔ NVIDIA GPU ➔ Response
+User Input ➔ React UI ➔ Local FastAPI ➔ Ollama Service ➔ NVIDIA GPU ➔ Response
 ```
 
-**Zero external API dependencies. 100% Confidential. Fully Sovereign.**
+- **Zero Cloud Egress**: All prompt tokens, document text, and image pixels remain strictly on local compute hardware.
+- **Zero Third-Party Telemetry**: No analytics or tracking scripts are loaded or executed.
