@@ -179,19 +179,38 @@ function App() {
     initChatHistory();
   }, []);
 
+  const [toggleError, setToggleError] = useState(null);
+
   // Handler to toggle Multi-Model Mode ON/OFF
   const handleToggleMultiModel = async (enabled) => {
     const targetState = Boolean(enabled);
-    setMultiModelMode(targetState);
+    setToggleError(null);
+
+    if (targetState) {
+      setIsSwitchingModel(true);
+      setTargetSwitchModelName("Qwen2.5 1.5B Router");
+    }
+
     try {
-      await fetch("http://localhost:8000/api/multi-model/toggle", {
+      const res = await fetch("http://localhost:8000/api/multi-model/toggle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: targetState })
       });
-      fetchModelsStatus();
+      const data = await res.json();
+      if (data.success) {
+        setMultiModelMode(Boolean(data.multi_model_enabled));
+        fetchModelsStatus();
+      } else {
+        setMultiModelMode(false);
+        setToggleError(data.error || "Unable to load Query Router while preserving RAM/VRAM safety limits.");
+      }
     } catch (err) {
       console.error("Failed to toggle Multi-Model Mode on backend:", err);
+      setMultiModelMode(false);
+      setToggleError("Connection error while enabling Multi-Model Mode.");
+    } finally {
+      setIsSwitchingModel(false);
     }
   };
 
@@ -669,6 +688,9 @@ function App() {
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
         multiModelMode={multiModelMode}
         onToggleMultiModel={handleToggleMultiModel}
+        modelStatus={modelStatus}
+        onRefreshTelemetry={fetchModelsStatus}
+        toggleError={toggleError}
       />
 
       {/* Main Workspace */}

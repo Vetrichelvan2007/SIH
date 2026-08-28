@@ -20,7 +20,10 @@ const Sidebar = ({
   isMobileOpen,
   onCloseMobile,
   multiModelMode = false,
-  onToggleMultiModel
+  onToggleMultiModel,
+  modelStatus = 'ready',
+  onRefreshTelemetry,
+  toggleError = null
 }) => {
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState('');
@@ -63,6 +66,8 @@ const Sidebar = ({
     ? (systemStatus.active_model.includes('qwen') ? 'Qwen2.5-Coder' : (systemStatus.active_model.includes('phi') ? 'Phi-4 Mini' : systemStatus.active_model))
     : 'None Loaded';
 
+  const isStartingRouter = isSwitchingModel && targetSwitchModelName.includes('Router');
+
   return (
     <aside className={`sidebar ${isMobileOpen ? 'mobile-open' : ''}`}>
       {/* 1. Fixed Header Area */}
@@ -97,30 +102,37 @@ const Sidebar = ({
         {/* Multi-Model Mode Toggle Card */}
         <div className="sidebar-section">
           <div 
-            onClick={() => onToggleMultiModel && onToggleMultiModel(!multiModelMode)}
+            onClick={() => !isStartingRouter && onToggleMultiModel && onToggleMultiModel(!multiModelMode)}
             style={{
-              background: multiModelMode ? 'rgba(6, 182, 212, 0.12)' : 'var(--bg-card)',
-              border: multiModelMode ? '1px solid var(--accent-cyan)' : '1px solid var(--border-subtle)',
+              background: isStartingRouter ? 'rgba(245, 158, 11, 0.12)' : (multiModelMode ? 'rgba(6, 182, 212, 0.12)' : 'var(--bg-card)'),
+              border: isStartingRouter ? '1px solid #f59e0b' : (multiModelMode ? '1px solid var(--accent-cyan)' : '1px solid var(--border-subtle)'),
               borderRadius: '8px',
               padding: '8px 10px',
-              cursor: 'pointer',
+              cursor: isStartingRouter ? 'wait' : 'pointer',
               transition: 'all 0.2s ease'
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '11px', fontWeight: 600, color: multiModelMode ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>
+              <span style={{ fontSize: '11px', fontWeight: 600, color: isStartingRouter ? '#f59e0b' : (multiModelMode ? 'var(--accent-cyan)' : 'var(--text-secondary)') }}>
                 MULTI-MODEL MODE
               </span>
-              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: multiModelMode ? 'var(--accent-cyan)' : 'rgba(255,255,255,0.1)', color: multiModelMode ? '#000' : 'var(--text-muted)' }}>
-                {multiModelMode ? 'ON' : 'OFF'}
+              <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: isStartingRouter ? '#f59e0b' : (multiModelMode ? 'var(--accent-cyan)' : 'rgba(255,255,255,0.1)'), color: isStartingRouter || multiModelMode ? '#000' : 'var(--text-muted)' }}>
+                {isStartingRouter ? 'STARTING...' : (multiModelMode ? 'ON' : 'OFF')}
               </span>
             </div>
             <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-              {multiModelMode ? 'Qwen2.5 1.5B Router active' : 'Single model mode (0 overhead)'}
+              {isStartingRouter
+                ? 'Preparing Multi-Model Router...'
+                : (multiModelMode ? 'Qwen2.5 1.5B Router active' : 'Single model mode (0 overhead)')}
             </div>
-            {multiModelMode && (
+            {multiModelMode && !isStartingRouter && (
               <div style={{ fontSize: '9.5px', color: 'var(--accent-emerald)', marginTop: '3px', fontWeight: 500 }}>
                 ✓ Safety: RAM ≥1GB, VRAM ≥500MB
+              </div>
+            )}
+            {toggleError && (
+              <div style={{ fontSize: '10px', color: '#fca5a5', marginTop: '6px', background: 'rgba(244, 63, 94, 0.15)', padding: '4px 6px', borderRadius: '4px', border: '1px solid rgba(244, 63, 94, 0.3)' }}>
+                ⚠️ {toggleError}
               </div>
             )}
           </div>
@@ -248,6 +260,9 @@ const Sidebar = ({
           models={modelsStatus?.models || []}
           isSwitchingModel={isSwitchingModel}
           targetSwitchModelName={targetSwitchModelName}
+          modelStatus={modelStatus}
+          multiModelMode={multiModelMode}
+          onRefreshTelemetry={onRefreshTelemetry}
         />
 
         {/* System Resources Section */}

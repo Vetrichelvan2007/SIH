@@ -45,6 +45,43 @@ ROUTE_MODEL_MAP = {
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 
+def is_router_model(model_name: str) -> bool:
+    """Returns True if the model name corresponds to the Query Router (qwen2.5:1.5b)."""
+    if not model_name:
+        return False
+    name_lower = str(model_name).lower().strip()
+    return "1.5b" in name_lower or "router" in name_lower or "qwen2.5:1.5" in name_lower
+
+def is_model_protected(model_name: str) -> bool:
+    """Returns True if the model is currently protected from unloading."""
+    return MULTI_MODEL_MODE and is_router_model(model_name)
+
+def can_auto_unload(model_name: str) -> bool:
+    """
+    Absolute Router & Generation Protection Check:
+    Returns False if Multi-Model Mode is ENABLED and model is the Query Router (qwen2.5:1.5b).
+    Returns True otherwise for automatic memory management / eviction.
+    """
+    if not model_name:
+        return True
+    if MULTI_MODEL_MODE and is_router_model(model_name):
+        return False
+    return True
+
+def get_evictable_models(loaded_models: list) -> list:
+    """
+    Returns list of loaded models that are eligible for automatic eviction/unloading.
+    Excludes protected Query Router model (qwen2.5:1.5b) when Multi-Model Mode is enabled.
+    """
+    return [
+        m for m in loaded_models
+        if can_auto_unload(m.get("name", m.get("model", "")))
+    ]
+
+def get_unload_candidates(loaded_models: list) -> list:
+    """Alias for get_evictable_models."""
+    return get_evictable_models(loaded_models)
+
 def get_multi_model_mode() -> bool:
     """Returns current Multi-Model Mode status (True = ON, False = OFF)."""
     return MULTI_MODEL_MODE
@@ -52,91 +89,165 @@ def get_multi_model_mode() -> bool:
 def set_multi_model_mode(enabled: bool) -> Dict[str, Any]:
     """
     Sets Multi-Model Mode ON or OFF.
+    When set to ON:
+    - Automatically loads qwen2.5:1.5b Query Router into RAM/VRAM.
+    - Evicts idle/LRU non-router task models if RAM/VRAM is tight.
+    - Verifies router is loaded through Ollama.
+    - If loading fails, reverts MULTI_MODEL_MODE = False and returns success=False.
     When set to OFF:
+    - Removes router protection.
     - Automatically unloads qwen2.5:1.5b router from VRAM if loaded.
-    - Releases RAM and VRAM resources.
     """
     global MULTI_MODEL_MODE
-    MULTI_MODEL_MODE = bool(enabled)
 
-    unloaded_router = False
-    if not MULTI_MODEL_MODE:
-        # Check if router model is in loaded models list and unload it
+    if enabled:
+        # Temporarily enable flag so router load and safety checks evaluate protection
+        MULTI_MODEL_MODE = True
+        router_loaded, msg = ensure_router_loaded()
+        if not router_loaded:
+            # Revert mode to False on failure
+            MULTI_MODEL_MODE = False
+            return {
+                "success": False,
+                "multi_model_enabled": False,
+                "error": f"Unable to load Query Router while preserving RAM/VRAM safety limits: {msg}"
+            }
+        return {
+            "success": True,
+            "multi_model_enabled": True,
+            "router": {
+                "name": ROUTER_MODEL_ID,
+                "loaded": True,
+                "protected": True
+            },
+            "ram_safety_reserve_mb": RAM_SAFETY_RESERVE_MB,
+            "vram_safety_reserve_mb": VRAM_SAFETY_RESERVE_MB
+        }
+    else:
+        MULTI_MODEL_MODE = False
+        unloaded_router = False
         loaded_list = get_loaded_models()
         for m in loaded_list:
-            model_name = m.get("name", "").lower()
-            if "qwen2.5:1.5b" in model_name or "qwen2.5:1.5" in model_name or "1.5b" in model_name:
-                unload_model_and_verify(m.get("name", ROUTER_MODEL_ID))
+            model_name = m.get("name", "")
+            if is_router_model(model_name):
+                unload_model_and_verify(model_name, force=True)
                 unloaded_router = True
 
-    return {
-        "multi_model_mode": MULTI_MODEL_MODE,
-        "router_unloaded": unloaded_router,
-        "ram_safety_reserve_mb": RAM_SAFETY_RESERVE_MB,
-        "vram_safety_reserve_mb": VRAM_SAFETY_RESERVE_MB
-    }
+        return {
+            "success": True,
+            "multi_model_enabled": False,
+            "router_unloaded": unloaded_router,
+            "ram_safety_reserve_mb": RAM_SAFETY_RESERVE_MB,
+            "vram_safety_reserve_mb": VRAM_SAFETY_RESERVE_MB
+        }
 
 def ensure_router_loaded() -> Tuple[bool, str]:
     """
-    Step 1 & 2 of Multi-Model Mode memory workflow:
-    - Checks if qwen2.5:1.5b router is already loaded.
-    - If not loaded, verifies resource safety (RAM >= 1GB, VRAM >= safety reserve).
-    - If memory is insufficient, gracefully unloads currently loaded inference model(s)
-      and waits until RAM/VRAM resources are actually released before loading qwen2.5:1.5b.
+    Ensures Query Router (qwen2.5:1.5b) is loaded into RAM/VRAM for Multi-Model Mode:
+    1. Checks if qwen2.5:1.5b is already loaded in Ollama.
+    2. Verifies resource safety (RAM remaining after load >= 1GB, VRAM remaining after load >= 500MB).
+    3. If memory is tight, evicts non-router task models (idle/LRU).
+    4. Triggers load_model(ROUTER_MODEL_ID) and polls Ollama /api/ps to confirm load status.
     """
     import time
     loaded_list = get_loaded_models()
-    is_router_loaded = any("1.5b" in m.get("name", "").lower() or "router" in m.get("name", "").lower() for m in loaded_list)
+    is_router_loaded = any(is_router_model(m.get("name", "")) for m in loaded_list)
     if is_router_loaded:
-        return True, "Router (qwen2.5:1.5b) is already loaded in RAM/VRAM."
+        return True, f"Router ({ROUTER_MODEL_ID}) is already loaded in RAM/VRAM."
 
     # Check resource safety for router
     is_safe, msg, _ = check_resource_safety(ROUTER_MODEL_ID)
     if not is_safe:
-        # Unload non-router models to free VRAM/RAM
-        for m in loaded_list:
+        # Retrieve evictable non-router task models
+        candidates = get_evictable_models(loaded_list)
+        for m in candidates:
             m_name = m.get("name", "")
-            if not ("1.5b" in m_name.lower() or "router" in m_name.lower()):
-                unload_model_and_verify(m_name)
-        time.sleep(0.5)
+            print(f"[RESOURCES] Unloading non-router model '{m_name}' to free resources for Query Router...")
+            unload_model_and_verify(m_name, force=True)
+            time.sleep(0.5)
+            # Re-check safety after each unload
+            is_safe, _, _ = check_resource_safety(ROUTER_MODEL_ID)
+            if is_safe:
+                break
 
-    # Load router model
+    # Re-verify resource safety after non-router eviction
+    is_safe, msg, _ = check_resource_safety(ROUTER_MODEL_ID)
+    if not is_safe:
+        return False, f"Insufficient memory to load Query Router while preserving safety reserves. {msg}"
+
+    # Load router model into Ollama
     load_success = load_model(ROUTER_MODEL_ID)
     if load_success:
-        time.sleep(0.5)
-        return True, "Router (qwen2.5:1.5b) loaded successfully."
-    return False, "Failed to load router model into memory."
+        # Poll Ollama /api/ps up to 10 seconds to confirm router is loaded
+        start = time.time()
+        while (time.time() - start) < 10.0:
+            time.sleep(0.5)
+            curr_loaded = get_loaded_models()
+            if any(is_router_model(m.get("name", "")) for m in curr_loaded):
+                return True, f"Router ({ROUTER_MODEL_ID}) loaded successfully into memory."
+
+    return False, f"Failed to verify router model ({ROUTER_MODEL_ID}) loading in memory."
 
 def ensure_specialist_loaded(target_model_id: str) -> Tuple[bool, str]:
     """
-    Step 4 & 5 of Multi-Model Mode memory workflow:
-    - Checks if target specialist model (e.g., qwen2.5-coder or phi4-mini) is already loaded.
-    - If not loaded, checks available RAM & VRAM safety.
-    - If memory is insufficient to keep both router and specialist loaded, unloads qwen2.5:1.5b
-      router model and waits for memory release before loading the specialist model.
+    Model Loading & Protected Eviction Algorithm:
+    STEP 1: Check if requested specialist model is already loaded. Use immediately if loaded.
+    STEP 2: Check RAM (>= 1GB) and VRAM (>= 500MB) safety reserves. If safe, load model.
+    STEP 3 & 4: If insufficient resources, retrieve unloadable non-router models ONLY.
+                The protected Query Router (qwen2.5:1.5b) is strictly excluded.
+    STEP 5: Evict non-router models iteratively using LRU order until resources are sufficient.
+    EMERGENCY CASE: If only the router remains loaded and resources remain insufficient,
+                    DO NOT unload the router. Keep router loaded and return clear status.
     """
     import time
     target_clean = target_model_id.lower().strip()
     loaded_list = get_loaded_models()
+
+    # STEP 1: Check if target specialist model is already loaded
     is_target_loaded = any(target_clean in m.get("name", "").lower() for m in loaded_list)
     if is_target_loaded:
         return True, f"Specialist model {target_model_id} is already loaded."
 
-    # Check resource safety
+    # STEP 2 & 3: Check resource safety before attempting eviction
     is_safe, msg, _ = check_resource_safety(target_model_id)
-    if not is_safe:
-        # Unload router model (or idle models) to free RAM & VRAM for the specialist model
-        for m in loaded_list:
-            m_name = m.get("name", "")
-            if not (target_clean in m_name.lower()):
-                unload_model_and_verify(m_name)
+    if is_safe:
+        load_success = load_model(target_model_id)
+        if load_success:
+            time.sleep(0.5)
+            return True, f"Specialist model {target_model_id} loaded successfully."
+        return False, f"Failed to load specialist model {target_model_id}."
+
+    # STEP 4: Retrieve unloadable candidates (router is strictly excluded when Multi-Model Mode is ON)
+    unload_candidates = get_unload_candidates(loaded_list)
+    unloadable_candidates = [m for m in unload_candidates if not (target_clean in m.get("name", "").lower())]
+
+    # EMERGENCY CASE: If no non-router models can be unloaded, do NOT unload router
+    if not unloadable_candidates:
+        return False, f"Insufficient resources to load {target_model_id}. The Query Router is protected while Multi-Model Mode is enabled."
+
+    # STEP 5: Iteratively unload non-router models until safety thresholds are satisfied
+    for m in unloadable_candidates:
+        m_name = m.get("name", "")
+        print(f"[RESOURCES] Unloading non-protected model '{m_name}' to free resources for {target_model_id}...")
+        unload_model_and_verify(m_name)
         time.sleep(0.5)
 
-    load_success = load_model(target_model_id)
-    if load_success:
-        time.sleep(0.5)
-        return True, f"Specialist model {target_model_id} loaded successfully."
-    return False, f"Failed to load specialist model {target_model_id}."
+        # Check if resources are now sufficient
+        is_safe, _, _ = check_resource_safety(target_model_id)
+        if is_safe:
+            break
+
+    # Re-verify resource safety after candidate eviction
+    is_safe, msg, _ = check_resource_safety(target_model_id)
+    if is_safe:
+        load_success = load_model(target_model_id)
+        if load_success:
+            time.sleep(0.5)
+            return True, f"Specialist model {target_model_id} loaded successfully."
+        return False, f"Failed to load specialist model {target_model_id}."
+
+    # Emergency protection trigger: Keep router loaded and return protected router error status
+    return False, f"Insufficient resources to load {target_model_id}. The Query Router is protected while Multi-Model Mode is enabled."
 
 def update_safety_reserves(ram_reserve_mb: Optional[float] = None, vram_reserve_mb: Optional[float] = None) -> Dict[str, Any]:
     """Updates RAM and VRAM safety reserve thresholds."""

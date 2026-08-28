@@ -13,6 +13,7 @@ from models.qwen_coder import stream_code_response
 from models.phi_answer import stream_answer_response
 from services.system_monitor import get_system_status, get_detailed_models_status
 from services.model_manager import switch_model_stream
+from services.ollama_service import get_loaded_models, unload_model_and_verify
 import services.chat_db as chat_db
 from services.router_service import (
     get_multi_model_mode,
@@ -26,6 +27,9 @@ from services.router_service import (
     ROUTE_PRIORITY,
     VALID_ROUTES
 )
+
+# Global Response Generation Activity Flag
+IS_GENERATING_RESPONSE: bool = False
 
 # Initialize SQLite Chat Database
 chat_db.init_db()
@@ -178,6 +182,9 @@ class AddMessageRequest(BaseModel):
 class ModelSwitchRequest(BaseModel):
     model: str = Field(..., description="Target model ID to switch and verify (e.g., 'qwen2.5-coder' or 'phi4-mini')")
 
+class UnloadModelRequest(BaseModel):
+    model: str = Field(..., description="Model ID or name to manually unload from RAM/VRAM")
+
 class MultiModelToggleRequest(BaseModel):
     enabled: bool = Field(..., description="Enable (True) or Disable (False) Multi-Model Mode")
 
@@ -187,6 +194,66 @@ class MultiModelConfigRequest(BaseModel):
 
 def sse_format(event_data: dict) -> str:
     return f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+# ==================================================
+# MANUAL MODEL UNLOAD REST API
+# ==================================================
+
+@app.post("/api/models/unload")
+def unload_model_endpoint(req: UnloadModelRequest):
+    """
+    Manually unloads a model from RAM/VRAM.
+    1. Verifies that the model is currently loaded in Ollama.
+    2. Verifies that no request is actively generating a response.
+    3. Triggers Ollama unload using keep_alive: 0 and verifies memory release.
+    4. Returns updated status.
+    """
+    global IS_GENERATING_RESPONSE
+    target = (req.model or "").strip()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model name cannot be empty.")
+
+    # 1. Fetch currently loaded models
+    loaded = get_loaded_models()
+    target_clean = target.lower()
+
+    matched_model_name = None
+    for m in loaded:
+        m_name = m.get("name", "")
+        if target_clean in m_name.lower() or m_name.lower() in target_clean:
+            matched_model_name = m_name
+            break
+
+    if not matched_model_name:
+        return {
+            "success": False,
+            "model": target,
+            "message": f"Model '{target}' is not currently loaded in memory."
+        }
+
+    # 2. Verify model is not actively generating
+    if IS_GENERATING_RESPONSE:
+        return {
+            "success": False,
+            "model": target,
+            "message": f"Cannot unload model '{target}': A response generation is currently in progress."
+        }
+
+    # 3. Perform manual unload (force=True allows user manual trigger)
+    unloaded = unload_model_and_verify(matched_model_name, force=True)
+
+    if unloaded:
+        return {
+            "success": True,
+            "model": target,
+            "message": f"Model '{target}' unloaded successfully from RAM/VRAM."
+        }
+    else:
+        return {
+            "success": False,
+            "model": target,
+            "message": f"Failed to unload '{target}'. Model may still be in use."
+        }
 
 # ==================================================
 # CHAT HISTORY REST APIS (SQLITE PERSISTENCE)
@@ -280,17 +347,15 @@ def multi_model_status_endpoint():
     }
 
 @app.post("/api/multi-model/toggle")
+@app.post("/api/multimodel")
 def toggle_multi_model_endpoint(request: MultiModelToggleRequest):
     """
     Toggles Multi-Model Mode ON or OFF.
-    When set to OFF: immediately unloads qwen2.5:1.5b router from VRAM and releases RAM/VRAM resources.
+    When set to ON: Automatically loads qwen2.5:1.5b router, evicting task models if memory is tight.
+    When set to OFF: Unloads qwen2.5:1.5b router from VRAM and releases RAM/VRAM resources.
     """
     result = set_multi_model_mode(request.enabled)
-    return {
-        "status": "success",
-        "message": f"Multi-Model Mode is now {'ON' if request.enabled else 'OFF'}",
-        **result
-    }
+    return result
 
 @app.post("/api/multi-model/config")
 def config_multi_model_endpoint(request: MultiModelConfigRequest):
@@ -352,6 +417,8 @@ def chat_endpoint(request: ChatRequest):
     chat_db.add_message(chat_id=target_chat_id, role="user", content=user_text)
 
     def generate_events():
+        global IS_GENERATING_RESPONSE
+        IS_GENERATING_RESPONSE = True
         # Initialize task_clean at the top of generate_events scope to guarantee it exists in all paths
         task_clean = "coding" if req_task in ["coding", "code"] else "general"
         selected_route = "CODING" if task_clean == "coding" else "GENERAL"
@@ -559,6 +626,8 @@ def chat_endpoint(request: ChatRequest):
             import traceback
             traceback.print_exc()
             yield sse_format({"type": "error", "stage": "error", "message": f"Server processing error: {str(exc)}"})
+        finally:
+            IS_GENERATING_RESPONSE = False
 
     return StreamingResponse(
         generate_events(),

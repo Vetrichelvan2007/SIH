@@ -15,10 +15,20 @@ def get_loaded_models() -> list:
         pass
     return []
 
-def unload_model(model_name: str) -> bool:
+def unload_model(model_name: str, force: bool = False) -> bool:
     """
     Instructs Ollama to unload a model immediately from VRAM using keep_alive: 0.
+    Blocks unload if Multi-Model Mode is enabled and model is the protected Query Router, unless force=True.
     """
+    if not force:
+        try:
+            from services.router_service import can_auto_unload
+            if not can_auto_unload(model_name):
+                print(f"[PROTECTION NOTICE] Automatic unload blocked: '{model_name}' is protected while Multi-Model Mode is enabled.")
+                return False
+        except ImportError:
+            pass
+
     try:
         # Request unload using keep_alive: 0
         payload = {
@@ -30,7 +40,7 @@ def unload_model(model_name: str) -> bool:
     except Exception:
         return False
 
-def unload_model_and_verify(model_name: str, max_timeout_sec: float = 6.0) -> bool:
+def unload_model_and_verify(model_name: str, max_timeout_sec: float = 6.0, force: bool = False) -> bool:
     """
     Requests Ollama to unload a model and polls /api/ps until RAM/VRAM resources
     are confirmed released or until max_timeout_sec is reached.
@@ -39,7 +49,16 @@ def unload_model_and_verify(model_name: str, max_timeout_sec: float = 6.0) -> bo
     if not model_name:
         return True
 
-    unload_model(model_name)
+    if not force:
+        try:
+            from services.router_service import can_auto_unload
+            if not can_auto_unload(model_name):
+                print(f"[PROTECTION NOTICE] Automatic unload blocked: '{model_name}' is protected while Multi-Model Mode is enabled.")
+                return False
+        except ImportError:
+            pass
+
+    unload_model(model_name, force=force)
     model_name_clean = model_name.lower().strip()
 
     start = time.time()

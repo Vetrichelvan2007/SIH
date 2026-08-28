@@ -120,7 +120,16 @@ def get_detailed_models_status() -> dict:
     Retrieves live loaded models breakdown from Ollama /api/ps and system RAM/VRAM resources.
     Conforms to GET /api/models/status API specification.
     """
-    from services.router_service import RAM_SAFETY_RESERVE_MB, VRAM_SAFETY_RESERVE_MB
+    from services.router_service import (
+        RAM_SAFETY_RESERVE_MB,
+        VRAM_SAFETY_RESERVE_MB,
+        is_router_model,
+        is_model_protected,
+        get_multi_model_mode
+    )
+
+    multi_mode = get_multi_model_mode()
+    is_router_loaded = False
 
     # 1. Fetch raw loaded models from Ollama /api/ps
     loaded_models_res = []
@@ -139,7 +148,13 @@ def get_detailed_models_status() -> dict:
                 vram_mb = round(size_vram_bytes / (1024 * 1024), 1)
 
                 name_lower = model_name.lower()
-                if "1.5b" in name_lower or "router" in name_lower:
+                is_router = is_router_model(model_name)
+                if is_router:
+                    is_router_loaded = True
+
+                protected = is_model_protected(model_name)
+
+                if is_router:
                     role = "ROUTER"
                     role_display = "Query Router"
                 elif "coder" in name_lower:
@@ -152,14 +167,17 @@ def get_detailed_models_status() -> dict:
                     role = "MAIN"
                     role_display = "Main Model"
 
-                # First loaded model is marked ACTIVE, others LOADED
-                status_str = "ACTIVE" if idx == 0 else "LOADED"
+                if protected:
+                    status_str = "PROTECTED"
+                else:
+                    status_str = "ACTIVE" if idx == 0 else "LOADED"
 
                 loaded_models_res.append({
                     "name": model_name,
                     "role": role,
                     "role_display": role_display,
                     "status": status_str,
+                    "protected": protected,
                     "ram_usage_mb": ram_mb,
                     "vram_usage_mb": vram_mb,
                     "size_gb": round(size_bytes / (1024**3), 2)
@@ -184,6 +202,13 @@ def get_detailed_models_status() -> dict:
         vram_available_mb = 0.0
 
     return {
+        "multi_model_mode": multi_mode,
+        "router": {
+            "name": "qwen2.5:1.5b",
+            "role": "Query Router",
+            "loaded": is_router_loaded,
+            "protected": multi_mode
+        },
         "models": loaded_models_res,
         "system": {
             "ram_total_mb": ram_total_mb,
