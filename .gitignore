@@ -19,3 +19,7 @@ frontend/dist/
 # IDE
 .vscode/
 .idea/
+chat_db.sqlite3
+conversations.db
+docs.db
+
